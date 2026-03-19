@@ -1,0 +1,6 @@
+path: ./data
+train: images/train
+val: images/val
+
+nc: 1  # 类别数量
+names: ['object']  # 类别名称
