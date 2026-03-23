@@ -2,5 +2,5 @@ path: ./data
 train: images/train
 val: images/val
 
-nc: 1  # 类别数量
-names: ['object']  # 类别名称
+nc: 1
+names: ['person']   # 专门用于检测人闯入
