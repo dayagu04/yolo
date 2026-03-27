@@ -24,6 +24,20 @@ class HyperparameterTuner:
         self.best_result = None
         self.best_score = 0.0
         
+        # 创建专门用于记录调优全局进度的日志
+        self.master_log_path = Path("logs/tuning_master_progress.log")
+        self.master_log_path.parent.mkdir(parents=True, exist_ok=True)
+        # 初始化清空并写入头部
+        with open(self.master_log_path, 'w', encoding='utf-8') as f:
+            f.write(f"=== YOLOv8 超参数搜索全局进度日志 ===\n")
+            f.write(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            
+    def _log_master_progress(self, message):
+        """记录全局进度"""
+        with open(self.master_log_path, 'a', encoding='utf-8') as f:
+            f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {message}\n")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
+        
     def generate_configs(self):
         """重新设计的参数搜索空间 - 适合6万+级别的大数据集"""
         configs = []
@@ -52,12 +66,12 @@ class HyperparameterTuner:
             {'lr0': 0.002, 'lrf': 0.01, 'name_suffix': 'lr002'}, # 为SGD准备的小学习率
         ]
         
-        # 3. Batch size & Optimizer (大数据集优先大batch)
+        # 3. Batch size & Optimizer (充分压榨 A30 24GB 显存)
         batch_opt_configs = [
-            {'batch': 16, 'optimizer': 'AdamW', 'name_suffix': 'b16_adamw'},
-            {'batch': 32, 'optimizer': 'AdamW', 'name_suffix': 'b32_adamw'}, # 推荐
-            {'batch': 16, 'optimizer': 'SGD', 'name_suffix': 'b16_sgd'},
-            {'batch': 32, 'optimizer': 'SGD', 'name_suffix': 'b32_sgd'},     # 经典组合
+            {'batch': 64, 'optimizer': 'AdamW', 'name_suffix': 'b64_adamw'},
+            {'batch': 128, 'optimizer': 'AdamW', 'name_suffix': 'b128_adamw'}, # 针对24G显存的大batch
+            {'batch': 64, 'optimizer': 'SGD', 'name_suffix': 'b64_sgd'},
+            {'batch': 128, 'optimizer': 'SGD', 'name_suffix': 'b128_sgd'},
         ]
         
         # 4. 损失权重组合 (精简为最具代表性的3种)
@@ -93,7 +107,29 @@ class HyperparameterTuner:
                         configs.append(cfg)
                         config_id += 1
 
-        print(f"\n✅ 最终生成 {len(configs)} 组有效配置！")
+        import random
+        random.seed(42) # 固定种子以保证每次抽样相同
+        
+        # 为了节约时间，随机抽取 10 组最具潜力的组合
+        if len(configs) > 10:
+            configs = random.sample(configs, 10)
+            
+        print(f"\n✅ 最终生成并抽取了 {len(configs)} 组有效配置进行测试！")
+        
+        # 估算预期时间
+        # 经验值: 1个epoch(5.3万图片) 在3090/4090等GPU上约需 5~10 分钟。我们按平均 8 分钟算。
+        # 每组配置平均 100 epochs，则每组配置理论时间 = 100 * 8 / 60 = 13.3 小时。
+        # 加上 early stopping (耐心30), 多数配置会在 50~80 epoch停止，实际时间可能只有一半（约6~7小时/组）。
+        # 总预估时间：
+        estimated_hours_per_run = 6.5
+        total_estimated_hours = estimated_hours_per_run * len(configs)
+        
+        self._log_master_progress(f"本次随机抽取了 {len(configs)} 组超参数组合。")
+        self._log_master_progress(f"大数据集特性：当前拥有 5.3 万训练集。")
+        self._log_master_progress(f"理论估算：若您的显卡为 RTX 4060 级别，单组配置（含 Early Stopping）约需 {estimated_hours_per_run} 小时。")
+        self._log_master_progress(f"==> 预期跑完所有组别需耗时: 约 {total_estimated_hours:.1f} 小时 ({total_estimated_hours/24:.1f} 天)。")
+        self._log_master_progress(f"（建议：随时可以手动中断，中断时会保留当前已经测试出的最佳配置。）\n")
+        
         return configs
     
     def run_training(self, config, device):
@@ -196,21 +232,37 @@ class HyperparameterTuner:
             print("警告: 使用CPU训练会很慢")
         
         configs = self.generate_configs()
-        print(f"\n将测试 {len(configs)} 组参数组合...")
+        total_configs = len(configs)
+        print(f"\n将测试 {total_configs} 组参数组合...")
         
         for i, config in enumerate(configs, 1):
-            print(f"\n[{i}/{len(configs)}] 正在测试: {config['name']}")
+            self._log_master_progress(f"---")
+            self._log_master_progress(f"即将开始测试第 {i}/{total_configs} 组配置: {config['name']}")
+            self._log_master_progress(f"参数详情: epochs={config['epochs']}, batch={config.get('batch', 16)}, lr0={config.get('lr0', 0.01)}, optimizer={config.get('optimizer', 'AdamW')}, box={config.get('box', 7.5)}, cls={config.get('cls', 0.5)}")
+            
             result = self.run_training(config, device)
             self.results.append(result)
             
             if result.get('success'):
                 m = result['metrics']
-                print(f"  mAP50: {m.get('mAP50', 0):.4f} | mAP: {m.get('mAP50-95', 0):.4f} | Score: {result['score']:.4f}")
+                score = result['score']
+                duration = result['duration_hours']
                 
-                if result['score'] > self.best_score:
-                    self.best_score = result['score']
+                log_msg = (f"✅ [{i}/{total_configs}] 完成 '{config['name']}'! "
+                           f"耗时: {duration:.2f}小时. "
+                           f"效果: mAP50={m.get('mAP50', 0):.4f}, mAP={m.get('mAP50-95', 0):.4f}, Score={score:.4f}")
+                
+                if score > self.best_score:
+                    self.best_score = score
                     self.best_result = result
-                    print(f"  *** 当前最佳配置! ***")
+                    log_msg += " ⭐ 当前最佳配置！"
+                    
+                self._log_master_progress(log_msg)
+            else:
+                self._log_master_progress(f"❌ [{i}/{total_configs}] 失败 '{config['name']}': {result.get('error', '未知错误')}")
+                
+            # 每次跑完一组，立刻保存中间结果，防止意外中断
+            self._save_results()
         
         self._print_final_summary()
         self._save_results()
