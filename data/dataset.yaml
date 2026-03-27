@@ -1,6 +1,7 @@
-path: ./data
-train: images/train
-val: images/val
+# Person Detection Dataset (Auto-Split)
+train: ../data/images/train
+val: ../data/images/val
+test: ../data/images/test
 
 nc: 1
-names: ['person']   # 专门用于检测人闯入
+names: ['person']

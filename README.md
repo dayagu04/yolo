@@ -1,88 +1,112 @@
 # 智能视频监控系统 (YOLOv8 + 实时流)
 
 ## 项目目标
-- 阶段1：单摄像头实时视频流传输到APP/网页
-- 阶段2：集成YOLO检测“人”闯入并报警（**当前重点**）
+- 阶段1：单摄像头实时视频流传输到APP/网页 (已完成)
+- 阶段2：集成YOLO检测"人"闯入并报警 (当前)
 - 阶段3：IP摄像头 + 多摄像头画面拼接
 
 ---
 
-## 第一步：训练Person检测模型（已按您的要求完成）
+## 📁 项目结构
 
-### 1. 更新后的训练配置
-
-`data/dataset.yaml` 已修改为：
-```yaml
-nc: 1
-names: ['person']
 ```
-
-`train.py` 已优化为适合person检测的训练脚本。
-
-### 2. 训练模型详细步骤
-
-#### 方式一：使用公开数据集（推荐新手）
-
-Ultralytics YOLOv8 支持直接使用COCO数据集中的person类别进行训练。
-
-**快速开始训练（使用预训练权重微调）：**
-
-```bash
-# 1. 确保依赖已安装
-pip install -r requirements.txt
-
-# 2. 开始训练
-python train.py
-```
-
-**训练完成后模型位置：**
-- 最佳模型：`runs/person_detect/weights/best.pt`
-- 最后模型：`runs/person_detect/weights/last.pt`
-
-#### 方式二：使用自己的数据集（后续推荐）
-
-1. 收集大量包含“人”的图片（不同角度、光线、距离）
-2. 使用 [Roboflow](https://roboflow.com) 或 LabelImg 标注
-3. 按 `data/images/train` 和 `data/labels/train` 结构存放
-4. 重新运行 `python train.py`
-
-### 3. 训练参数说明（可在train.py中调整）
-
-- `epochs=50`：先用50轮测试，效果好再增加到100~200
-- `imgsz=640`：平衡速度和精度
-- `batch=16`：根据显存调整（显存小可改为8）
-- `patience=20`：早停机制，避免过拟合
-
-### 4. 测试训练好的模型
-
-训练完成后可运行：
-
-```bash
-# 测试图片
-python detect.py --source data/images/val --weights runs/person_detect/weights/best.pt
-
-# 测试摄像头（后续会改成IP摄像头）
-python detect.py --source 0 --weights runs/person_detect/weights/best.pt
+yolo/
+├── scripts/                    # 核心脚本
+│   ├── logger.py              # 日志系统
+│   ├── process_downloaded_dataset.py  # 数据集处理
+│   └── train.py                # 模型训练
+├── data/                       # 数据集
+│   ├── images/
+│   │   ├── train/             # 训练集 (6349张)
+│   │   └── val/               # 验证集 (1588张)
+│   ├── labels/
+│   └── dataset.yaml
+├── logs/                       # 训练日志
+├── runs/                       # 训练结果
+├── server/                     # 实时流服务器
+├── app/                        # 前端页面
+└── README.md
 ```
 
 ---
 
-## 下一步计划
+## 🚀 快速开始
 
-训练完成后，请告诉我以下信息，我将立即进行下一步：
+### 数据集已准备好
+训练集: 6349张 | 验证集: 1588张 | 总计: 7937张
 
-1. 模型训练是否成功？（运行 `python train.py` 后告诉我结果）
-2. 是否需要我**修改代码将YOLO集成到实时视频流中**？（推荐）
-3. 之后再添加 **IP摄像头（RTSP）** 支持
+### 方案1: 直接训练（使用默认参数）
+```bash
+cd n:\yolo
+python scripts/train.py
+```
+
+### 方案2: 超参数调优（找到最佳配置）⭐推荐
+
+**快速调优** (6-8组配置, 预计6-15小时)
+```bash
+python scripts/hyperparameter_tuning.py
+```
+此脚本专门针对 `scripts/train.py:87-117` 中的关键参数（lr0、batch、optimizer、box/cls权重等）进行网格搜索。
+
+**全面调优** (50+组配置, 48-96小时) - 追求极致性能
+```bash
+python scripts/extensive_tuning.py
+```
+
+### 方案3: 多次重复验证（确保找到最佳模型）⭐⭐强烈推荐
+
+**重复训练验证** - 多次运行相同配置，找到最稳定的最佳模型
+```bash
+# 重复5次（默认，推荐）
+python scripts/batch_validator.py
+
+# 或重复10次（更可靠）
+# 修改脚本中的 num_repeats = 10
+
+# 或重复20次（极致验证）
+# 修改脚本中的 num_repeats = 20
+```
+
+**多配置对比验证** - 测试6种参数配置，每种重复3次
+```bash
+python scripts/model_validator.py
+```
+
+详细说明见 [TUNING_GUIDE.md](TUNING_GUIDE.md)
+
+### 训练参数
+- **基础模型**: yolov8n.pt
+- **图像尺寸**: 640
+- **Epochs**: 150 (自动早停)
+- **Batch**: 8 (可通过调优脚本优化为16等)
+
+**推荐流程**:
+1. 先运行 `python scripts/hyperparameter_tuning.py` 找到最佳参数组合
+2. 根据调优结果修改 `scripts/train.py` 中的训练参数
+3. 使用 `python scripts/train.py` 进行最终完整训练
+
+### 训练完成后
+```bash
+# 测试模型
+python -c "from ultralytics import YOLO; model=YOLO('runs/person_large_dataset/weights/best.pt')"
+```
 
 ---
 
-**当前状态**：已为您准备好训练环境，`train.py` 和 `dataset.yaml` 均已优化为**person闯入检测**专用。
+## 📋 日志系统
 
-**请现在运行以下命令开始训练：**
+日志文件保存在 `logs/` 目录，格式: `person_training_YYYYMMDD_HHMMSS.log`
 
+查看日志:
 ```bash
-python train.py
+type logs\*.log
 ```
 
-训练结束后回复我，我们继续集成实时检测和IP摄像头支持。
+---
+
+## 后续计划
+
+1. 集成YOLO到实时视频流
+2. 添加IP摄像头支持
+3. 多摄像头画面拼接
