@@ -1,7 +1,6 @@
 """
-YOLOv8 彻底版超参数搜索 (充分利用显存)
-epochs=[100,200,300,400] + batch=[16,24] + 多维度全面搜索
-显存利用率高，搜索范围全面，训练时间会很长
+YOLOv8 超参数随机搜索：epochs × 学习率 × batch × 优化器 × 损失权重。
+数据路径与 batch/workers/AMP 等运行配置见下方 HARDWARE_PROFILE（由本机探针结果填写，不读 JSON）。
 """
 
 from ultralytics import YOLO
@@ -14,6 +13,52 @@ import shutil
 
 sys.path.insert(0, str(Path(__file__).parent))
 from logger import Logger
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# ---------------------------------------------------------------------------
+# 数据与硬件运行配置（与 logs/server_benchmark.json 2026-03-28 探针对齐，可手改）
+# ---------------------------------------------------------------------------
+HARDWARE_PROFILE = {
+    "data": "data/dataset.yaml",
+    "imgsz": 640,
+    "max_batch_ok": 256,
+    "batch_candidates": [128, 160, 192],
+    "workers": 4,
+    "amp": True,
+}
+
+
+def yolov8n_weights() -> str:
+    p = REPO_ROOT / "yolov8n.pt"
+    return str(p) if p.is_file() and p.stat().st_size > 100_000 else "yolov8n.pt"
+
+
+def build_batch_opt_configs(batch_list):
+    """由探针得到的 batch 列表构造与原先类似的 optimizer 组合。"""
+    batch_list = sorted({int(b) for b in batch_list if int(b) >= 8})
+    if not batch_list:
+        batch_list = [64, 128]
+    if len(batch_list) >= 2:
+        lo, hi = batch_list[0], batch_list[-1]
+    else:
+        lo = hi = batch_list[0]
+    configs = [
+        {"batch": hi, "optimizer": "AdamW", "name_suffix": f"b{hi}_adamw"},
+        {"batch": hi, "optimizer": "SGD", "name_suffix": f"b{hi}_sgd"},
+        {"batch": lo, "optimizer": "AdamW", "name_suffix": f"b{lo}_adamw"},
+        {"batch": lo, "optimizer": "SGD", "name_suffix": f"b{lo}_sgd"},
+        {"batch": hi, "optimizer": "auto", "name_suffix": f"b{hi}_auto"},
+    ]
+    # 去重（lo==hi 时）
+    seen = set()
+    out = []
+    for c in configs:
+        key = (c["batch"], c["optimizer"])
+        if key not in seen:
+            seen.add(key)
+            out.append(c)
+    return out
 
 
 class HyperparameterTuner:
@@ -39,21 +84,28 @@ class HyperparameterTuner:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
         
     def generate_configs(self):
-        """重新设计的参数搜索空间 - 适合6万+级别的大数据集"""
+        """参数搜索空间；batch/workers/amp/data 来自 HARDWARE_PROFILE。"""
         configs = []
-        
+        hw = HARDWARE_PROFILE
+
         # 基础配置模板
         base_config = {
-            'imgsz': 640,
-            'patience': 30,           # 大数据集收敛慢，但震荡小，耐心可适当缩短
-            'pretrained': True,
-            'momentum': 0.937,
-            'weight_decay': 0.0005,
-            'warmup_epochs': 3.0,     # 大数据集 warmup 可短一点
-            'amp': False,
-            'workers': 8,
-            'seed': 42,
+            "data": hw["data"],
+            "imgsz": int(hw["imgsz"]),
+            "patience": 30,
+            "pretrained": True,
+            "momentum": 0.937,
+            "weight_decay": 0.0005,
+            "warmup_epochs": 3.0,
+            "amp": bool(hw["amp"]),
+            "workers": int(hw["workers"]),
+            "seed": 42,
         }
+        self._log_master_progress(
+            f"使用 HARDWARE_PROFILE: data={hw['data']}, imgsz={hw['imgsz']}, "
+            f"workers={base_config['workers']}, amp={base_config['amp']}, "
+            f"max_batch_ok={hw['max_batch_ok']}, batch_candidates={hw['batch_candidates']}"
+        )
         
         # 1. epochs 组合 (数据集大，epoch可适当减少)
         # 6万数据跑100个epoch已经相当于小数据跑几千个了
@@ -67,14 +119,8 @@ class HyperparameterTuner:
             {'lr0': 0.015, 'lrf': 0.005, 'name_suffix': 'lr015'}, # 稍大的学习率
         ]
         
-        # 3. Batch size & Optimizer (充分压榨 A30 24GB 显存)
-        batch_opt_configs = [
-            {'batch': 64, 'optimizer': 'AdamW', 'name_suffix': 'b64_adamw'},
-            {'batch': 128, 'optimizer': 'AdamW', 'name_suffix': 'b128_adamw'}, # 针对24G显存的大batch
-            {'batch': 64, 'optimizer': 'SGD', 'name_suffix': 'b64_sgd'},
-            {'batch': 128, 'optimizer': 'SGD', 'name_suffix': 'b128_sgd'},
-            {'batch': 64, 'optimizer': 'auto', 'name_suffix': 'b64_auto'}, # 让YOLO自己选
-        ]
+        # 3. Batch size & Optimizer（档位来自 HARDWARE_PROFILE["batch_candidates"]）
+        batch_opt_configs = build_batch_opt_configs(hw["batch_candidates"])
         
         # 4. 损失权重组合 (全面测试各种侧重点)
         loss_configs = [
@@ -87,8 +133,8 @@ class HyperparameterTuner:
         # 彻底版：epochs × lr × batch × loss 全面组合
         config_id = 1
         total_expected = len(epochs_list) * len(lr_configs) * len(batch_opt_configs) * len(loss_configs)
-        print(f"正在生成针对大数据集优化后的参数组合...")
-        print(f"epochs={epochs_list}, batch=16/32, 预计约 {total_expected} 组")
+        print(f"正在生成参数组合...")
+        print(f"epochs={epochs_list}, batch/optimizer 组合数={len(batch_opt_configs)}, 展开后约 {total_expected} 组（过滤后更少）")
 
         for epochs in epochs_list:
             for lr_cfg in lr_configs:
@@ -106,6 +152,10 @@ class HyperparameterTuner:
                         cfg.update(lr_cfg)
                         cfg.update(bo_cfg)
                         cfg.update(loss_cfg)
+                        cfg['data'] = base_config['data']
+                        cfg['imgsz'] = base_config['imgsz']
+                        cfg['workers'] = base_config['workers']
+                        cfg['amp'] = base_config['amp']
                         cfg['name'] = f'ep{epochs}_{lr_cfg["name_suffix"]}_{bo_cfg["name_suffix"]}_{loss_cfg["name_suffix"]}'
                         configs.append(cfg)
                         config_id += 1
@@ -121,18 +171,13 @@ class HyperparameterTuner:
             
         print(f"\n✅ 最终生成并抽取了 {len(configs)} 组有效配置进行测试！")
         
-        # 估算预期时间
-        # 经验值: 1个epoch(5.3万图片) 在3090/4090等GPU上约需 5~10 分钟。我们按平均 8 分钟算。
-        # 每组配置平均 100 epochs，则每组配置理论时间 = 100 * 8 / 60 = 13.3 小时。
-        # 加上 early stopping (耐心30), 多数配置会在 50~80 epoch停止，实际时间可能只有一半（约6~7小时/组）。
-        # 总预估时间：
-        estimated_hours_per_run = 6.5
-        total_estimated_hours = estimated_hours_per_run * len(configs)
-        
         self._log_master_progress(f"本次随机抽取了 {len(configs)} 组超参数组合。")
-        self._log_master_progress(f"大数据集特性：当前拥有 5.3 万训练集。")
-        self._log_master_progress(f"理论估算：若显卡为 A30 24G 级别，因为 batch 开到了 64~128，单组配置约需 3 小时。")
-        self._log_master_progress(f"==> 预期跑完所有 {test_samples} 组别需耗时: 约 {3 * len(configs):.1f} 小时 ({(3 * len(configs))/24:.1f} 天)。")
+        self._log_master_progress(
+            "耗时与数据集规模、batch、早停有关；探针仅测子集速度，全量请以实测为准。"
+        )
+        self._log_master_progress(
+            f"==> 本批共 {len(configs)} 组配置；若单组约 2–8 小时，总计约 {2 * len(configs)}–{8 * len(configs)} 小时量级。"
+        )
         self._log_master_progress(f"（建议：随时可以手动中断，中断时会保留当前已经测试出的最佳配置。）\n")
         
         return configs
@@ -146,15 +191,15 @@ class HyperparameterTuner:
         log.info(f"参数: epochs={config['epochs']}, batch={config.get('batch', 16)}, "
                 f"lr0={config.get('lr0', 0.01)}, optimizer={config.get('optimizer', 'AdamW')}")
         
-        model = YOLO('yolov8n.pt')
+        model = YOLO(yolov8n_weights())
         
         start_time = datetime.now()
         
         try:
             results = model.train(
-                data='data/dataset.yaml',
+                data=config.get('data', HARDWARE_PROFILE['data']),
                 epochs=config['epochs'],
-                imgsz=config.get('imgsz', 640),
+                imgsz=config.get('imgsz', HARDWARE_PROFILE['imgsz']),
                 batch=config.get('batch', 16),
                 patience=config.get('patience', 50),
                 project='runs/tuning',
@@ -172,7 +217,7 @@ class HyperparameterTuner:
                 save_period=20,
                 verbose=False,   # 减少输出噪声
                 plots=False,     # 关闭绘图，进一步节省显存
-                workers=2,       # 减少worker数量，避免内存竞争
+                workers=int(config.get('workers', 8)),
                 seed=config.get('seed', 42),
                 box=config.get('box', 7.5),
                 cls=config.get('cls', 0.5),

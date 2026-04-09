@@ -53,9 +53,12 @@ def train():
     """训练模型"""
     log = Logger("person_training", log_dir="logs")
     
-    log.section("Person检测模型训练")
-    log.info("数据集: 7937张 (0.8:0.2划分)")
-    log.info("Epochs: 150 | Batch: 8 | 图像尺寸: 640")
+    log.section("Person检测模型训练（调优最佳配置）")
+    log.info("数据集: data/dataset.yaml | 0.8:0.2 划分")
+    log.info(
+        "epochs=150 | batch=128 | imgsz=640 | SGD | lr0=0.005 | "
+        "box=6.5 cls=0.65 | amp=True | patience=30"
+    )
     
     # 检查GPU
     if torch.cuda.is_available():
@@ -77,50 +80,50 @@ def train():
     log.info("开始训练...")
     log.separator("-")
     
-    # 创建回调
+    # 创建回调（新版 Ultralytics 不支持在 train() 里传 callbacks，需 add_callback）
     callback = TrainingCallback(log)
+    model.add_callback("on_train_epoch_start", callback.on_train_epoch_start)
+    model.add_callback("on_fit_epoch_end", callback.on_fit_epoch_end)
     
     # 训练
     start_time = datetime.now()
     
     try:
+        # 与 logs/tuning_results.json best_config（ep150_lr005_b128_sgd_loss_balanced）一致
         results = model.train(
             data='data/dataset.yaml',
             epochs=150,
             imgsz=640,
-            batch=8,
-            patience=50,
+            batch=128,
+            patience=30,
             project='runs',
-            name='person_large_dataset',
+            name='person_best_config',
             device=device,
             pretrained=True,
-            optimizer='AdamW',
-            lr0=0.01,
+            optimizer='SGD',
+            lr0=0.005,
             lrf=0.01,
             momentum=0.937,
             weight_decay=0.0005,
-            warmup_epochs=5.0,
-            amp=False,
+            warmup_epochs=3.0,
+            amp=True,
             save=True,
             save_period=20,
             verbose=True,
             plots=True,
             workers=4,
             seed=42,
-            box=7.5,
-            cls=0.5,
+            box=6.5,
+            cls=0.65,
             dfl=1.5,
-            callbacks={
-                'on_train_epoch_start': callback.on_train_epoch_start,
-                'on_fit_epoch_end': callback.on_fit_epoch_end,
-            }
         )
         
         # 训练完成
         log.section("训练完成")
         log.log_elapsed_time()
         
-        best_model = "runs/person_large_dataset/weights/best.pt"
+        # Ultralytics 会将 project/name 放在 runs/detect/ 下
+        best_model = "runs/detect/runs/person_best_config/weights/best.pt"
         log.info(f"最佳模型: {best_model}")
         
         if results and hasattr(results, 'results_dict'):
