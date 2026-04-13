@@ -79,16 +79,20 @@ def train():
     
     # 创建回调
     callback = TrainingCallback(log)
-    
+
+    # 添加回调到模型
+    model.add_callback('on_train_epoch_start', callback.on_train_epoch_start)
+    model.add_callback('on_fit_epoch_end', callback.on_fit_epoch_end)
+
     # 训练
     start_time = datetime.now()
-    
+
     try:
         results = model.train(
             data='data/dataset.yaml',
             epochs=150,
             imgsz=640,
-            batch=8,
+            batch=32,
             patience=50,
             project='runs',
             name='person_large_dataset',
@@ -109,11 +113,7 @@ def train():
             seed=42,
             box=7.5,
             cls=0.5,
-            dfl=1.5,
-            callbacks={
-                'on_train_epoch_start': callback.on_train_epoch_start,
-                'on_fit_epoch_end': callback.on_fit_epoch_end,
-            }
+            dfl=1.5
         )
         
         # 训练完成
