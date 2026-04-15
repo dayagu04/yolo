@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout *)",
+      "Bash(git merge server-tuning --no-ff -m 'merge: 合并 server-tuning 分支，引入服务器训练最优模型及调参工具 *)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'merge: 合并 server-tuning 分支，引入服务器训练最优模型及调参工具 *)",
+      "Bash(du -sh /n/yolo/runs/detect/runs/*)",
+      "Bash(powershell -command ' *)",
+      "Bash(\\\\\\\\?\\\\C:\\\\msys64\\\\ucrt64\\\\bin\\\\python.exe -c \"import sys; print\\(sys.executable\\); import pkg_resources; pkgs = [p.project_name for p in pkg_resources.working_set]; print\\('\\\\n'.join\\(sorted\\(pkgs\\)\\)\\)\")",
+      "Bash(\"/c/msys64/ucrt64/bin/python.exe\" -c \"import sys; print\\(sys.executable\\); print\\(sys.version\\)\")",
+      "Bash(\"/c/msys64/ucrt64/bin/python.exe\" -m pip list)",
+      "Bash(where python *)",
+      "Bash(where python3 *)",
+      "Bash(\"C:/Program Files/python/python.exe\" -m pip list)",
+      "Bash(python scripts/test_cam.py)",
+      "Bash(kill %1)",
+      "Bash(python -c \"import cv2; cap = cv2.VideoCapture\\(0\\); print\\('backend:', cap.getBackendName\\(\\)\\); cap.release\\(\\)\")"
+    ]
+  }
+}

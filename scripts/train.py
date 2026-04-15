@@ -89,7 +89,6 @@ def train():
     start_time = datetime.now()
 
     try:
-        # 与 logs/tuning_results.json best_config（ep150_lr005_b128_sgd_loss_balanced）一致
         results = model.train(
             data='data/dataset.yaml',
             epochs=150,

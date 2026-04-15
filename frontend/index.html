@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>智能安防监控</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d0d0d;
+      --surface: #1a1a1a;
+      --border: #2a2a2a;
+      --accent: #00e676;
+      --danger: #ff1744;
+      --warn: #ff9100;
+      --text: #e0e0e0;
+      --muted: #666;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Microsoft YaHei', 'Segoe UI', Arial, sans-serif;
+      height: 100vh;
+      display: grid;
+      grid-template-rows: 52px 1fr 48px;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
+      gap: 16px;
+    }
+    header h1 { font-size: 16px; font-weight: 600; letter-spacing: 1px; }
+    .ws-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--muted);
+      transition: background .3s;
+    }
+    .ws-dot.connected { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+    .ws-dot.error     { background: var(--danger); }
+    header .spacer { flex: 1; }
+    .header-stat { font-size: 12px; color: var(--muted); }
+    .header-stat span { color: var(--text); font-weight: 600; }
+
+    /* ── Main layout ── */
+    main {
+      display: grid;
+      grid-template-columns: 1fr 280px;
+      overflow: hidden;
+    }
+
+    /* ── Video panel ── */
+    .video-panel {
+      position: relative;
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    #stream {
+      max-width: 100%;
+      max-height: 100%;
+      display: block;
+    }
+    .video-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    /* Alert banner */
+    .alert-banner {
+      position: absolute;
+      top: 16px; left: 50%;
+      transform: translateX(-50%) translateY(-80px);
+      background: var(--danger);
+      color: #fff;
+      padding: 10px 24px;
+      border-radius: 6px;
+      font-weight: 700;
+      font-size: 15px;
+      letter-spacing: .5px;
+      transition: transform .3s ease;
+      white-space: nowrap;
+      pointer-events: none;
+      z-index: 10;
+    }
+    .alert-banner.show { transform: translateX(-50%) translateY(0); }
+
+    /* Person count badge */
+    .count-badge {
+      position: absolute;
+      bottom: 16px; left: 16px;
+      background: rgba(0,0,0,.7);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      padding: 4px 12px;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+    .sidebar-section {
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .sidebar-section h3 {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+
+    /* Stats grid */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .stat-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      text-align: center;
+    }
+    .stat-card .val {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--accent);
+      line-height: 1;
+    }
+    .stat-card .lbl {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    /* Controls */
+    .control-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .control-row label { font-size: 13px; }
+    .toggle {
+      position: relative;
+      width: 40px; height: 22px;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+      position: absolute; inset: 0;
+      background: var(--border);
+      border-radius: 22px;
+      cursor: pointer;
+      transition: background .2s;
+    }
+    .toggle-slider::before {
+      content: '';
+      position: absolute;
+      width: 16px; height: 16px;
+      left: 3px; top: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform .2s;
+    }
+    .toggle input:checked + .toggle-slider { background: var(--accent); }
+    .toggle input:checked + .toggle-slider::before { transform: translateX(18px); }
+
+    input[type=range] {
+      width: 100%;
+      accent-color: var(--accent);
+      margin-top: 4px;
+    }
+    .range-row { margin-bottom: 10px; }
+    .range-row .range-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .range-row .range-label span { color: var(--text); }
+
+    /* Alert log */
+    .alert-log {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0 16px 16px;
+    }
+    .alert-log h3 {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--muted);
+      padding: 16px 0 10px;
+      position: sticky;
+      top: 0;
+      background: var(--surface);
+    }
+    .log-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+    }
+    .log-item .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--danger);
+      margin-top: 4px;
+      flex-shrink: 0;
+    }
+    .log-item .log-time { color: var(--muted); white-space: nowrap; }
+    .log-item .log-msg  { color: var(--text); }
+    .log-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 20px 0; }
+
+    /* ── Footer ── */
+    footer {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
+      gap: 12px;
+    }
+    .btn {
+      padding: 6px 16px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text);
+      border-radius: 4px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: border-color .2s, color .2s;
+    }
+    .btn:hover { border-color: var(--accent); color: var(--accent); }
+    .btn.danger:hover { border-color: var(--danger); color: var(--danger); }
+    footer .spacer { flex: 1; }
+    .header-stat--spaced { margin-left: 16px; }
+    .count-badge.hidden   { display: none; }
+    .stat-card--wide      { grid-column: span 2; }
+    .stat-val--sm         { font-size: 14px; color: var(--muted); }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="ws-dot" id="wsDot"></div>
+  <h1>智能安防监控</h1>
+  <div class="spacer"></div>
+  <div class="header-stat">摄像头 <span id="hCamId">0</span></div>
+  <div class="header-stat header-stat--spaced">今日告警 <span id="hAlertCount">0</span></div>
+</header>
+
+<main>
+  <!-- 视频区 -->
+  <div class="video-panel">
+    <img id="stream" src="/video_feed?camera_id=0" alt="视频流">
+    <div class="video-overlay">
+      <div class="alert-banner" id="alertBanner">⚠ 检测到人员入侵！</div>
+      <div class="count-badge hidden" id="countBadge">当前 <span id="personCount">0</span> 人</div>
+    </div>
+  </div>
+
+  <!-- 侧边栏 -->
+  <aside class="sidebar">
+
+    <!-- 统计 -->
+    <div class="sidebar-section">
+      <h3>实时统计</h3>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="val" id="statPerson">0</div>
+          <div class="lbl">当前人数</div>
+        </div>
+        <div class="stat-card">
+          <div class="val" id="statAlerts">0</div>
+          <div class="lbl">今日告警</div>
+        </div>
+        <div class="stat-card stat-card--wide">
+          <div class="val stat-val--sm" id="statLastAlert">—</div>
+          <div class="lbl">最后告警时间</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 检测设置 -->
+    <div class="sidebar-section">
+      <h3>检测设置</h3>
+      <div class="control-row">
+        <label>YOLO 检测</label>
+        <label class="toggle">
+          <input type="checkbox" id="toggleDetection" checked onchange="setDetection(this.checked)" aria-label="启用YOLO检测">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="range-row">
+        <div class="range-label">
+          置信度阈值
+          <span id="confVal">0.50</span>
+        </div>
+        <input type="range" id="confSlider" min="10" max="95" value="50"
+               oninput="updateConf(this.value)" onchange="applyConf(this.value)"
+               aria-label="置信度阈值">
+      </div>
+    </div>
+
+    <!-- 告警日志 -->
+    <div class="alert-log">
+      <h3>告警记录</h3>
+      <div id="logList">
+        <div class="log-empty">暂无告警</div>
+      </div>
+    </div>
+
+  </aside>
+</main>
+
+<footer>
+  <button type="button" class="btn" onclick="reloadStream()">刷新画面</button>
+  <button type="button" class="btn danger" onclick="clearLog()">清空日志</button>
+  <div class="spacer"></div>
+  <div class="footer-info">YOLOv8n · mAP50=0.802 · MJPEG 流</div>
+</footer>
+
+<script>
+  // ── 状态 ──────────────────────────────────────────────────────────
+  let alertCount = 0;
+  let alertTimer = null;
+  const CAMERA_ID = 0;
+
+  // ── WebSocket ─────────────────────────────────────────────────────
+  const wsDot = document.getElementById('wsDot');
+  let ws, wsRetryDelay = 2000;
+
+  function connectWS() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+    ws.onopen = () => {
+      wsDot.className = 'ws-dot connected';
+      wsRetryDelay = 2000;
+      // 心跳
+      setInterval(() => ws.readyState === WebSocket.OPEN && ws.send('ping'), 20000);
+    };
+
+    ws.onmessage = (e) => {
+      const data = JSON.parse(e.data);
+      if (data.type === 'person_detected') handleAlert(data);
+    };
+
+    ws.onerror = () => { wsDot.className = 'ws-dot error'; };
+
+    ws.onclose = () => {
+      wsDot.className = 'ws-dot';
+      setTimeout(connectWS, wsRetryDelay);
+      wsRetryDelay = Math.min(wsRetryDelay * 2, 30000);
+    };
+  }
+
+  connectWS();
+
+  // ── 告警处理 ──────────────────────────────────────────────────────
+  function handleAlert(data) {
+    alertCount++;
+    document.getElementById('hAlertCount').textContent = alertCount;
+    document.getElementById('statAlerts').textContent = alertCount;
+    document.getElementById('statPerson').textContent = data.count;
+    document.getElementById('personCount').textContent = data.count;
+    document.getElementById('countBadge').classList.remove('hidden');
+
+    const t = new Date(data.timestamp * 1000);
+    const ts = t.toLocaleTimeString('zh-CN');
+    document.getElementById('statLastAlert').textContent = ts;
+
+    // Banner
+    const banner = document.getElementById('alertBanner');
+    banner.textContent = `⚠ 检测到 ${data.count} 人入侵！`;
+    banner.classList.add('show');
+    clearTimeout(alertTimer);
+    alertTimer = setTimeout(() => {
+      banner.classList.remove('show');
+      document.getElementById('countBadge').classList.add('hidden');
+      document.getElementById('statPerson').textContent = 0;
+    }, 4000);
+
+    // 日志
+    addLog(ts, `检测到 ${data.count} 人`);
+  }
+
+  function addLog(time, msg) {
+    const list = document.getElementById('logList');
+    const empty = list.querySelector('.log-empty');
+    if (empty) empty.remove();
+
+    const item = document.createElement('div');
+    item.className = 'log-item';
+    item.innerHTML = `
+      <div class="dot"></div>
+      <div>
+        <div class="log-time">${time}</div>
+        <div class="log-msg">${msg}</div>
+      </div>`;
+    list.prepend(item);
+
+    // 最多保留 50 条
+    while (list.children.length > 50) list.lastChild.remove();
+  }
+
+  // ── 控制 ──────────────────────────────────────────────────────────
+  function setDetection(enabled) {
+    fetch(`/api/camera/${CAMERA_ID}/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+  }
+
+  function updateConf(val) {
+    document.getElementById('confVal').textContent = (val / 100).toFixed(2);
+  }
+
+  function applyConf(val) {
+    fetch(`/api/camera/${CAMERA_ID}/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conf: val / 100 }),
+    });
+  }
+
+  function reloadStream() {
+    const img = document.getElementById('stream');
+    img.src = `/video_feed?camera_id=${CAMERA_ID}&t=${Date.now()}`;
+  }
+
+  function clearLog() {
+    const list = document.getElementById('logList');
+    list.innerHTML = '<div class="log-empty">暂无告警</div>';
+  }
+</script>
+</body>
+</html>

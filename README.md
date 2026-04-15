@@ -1,62 +1,30 @@
-# 智能视频监控（YOLOv8 + 实时流）
+# 智能视频监控系统 (AI Video Surveillance)
 
-## 目标
+基于 YOLOv8 的实时视频监控系统，支持边缘设备推理、Web端实时流查看与人员闯入告警。
 
-- 阶段 1：单路实时视频流到网页/App（已完成）
-- 阶段 2：YOLO 检测「人」并告警（进行中）
-- 阶段 3：IP 摄像头与多路拼接
+## 🎯 架构设计 (四大核心模块)
+1. **算法引擎：** 纯粹的图像处理与 YOLOv8 目标检测。
+2. **流媒体服务：** FastAPI 驱动，负责视频流的重编码与 HTTP 广播。
+3. **神经中枢：** WebSocket 信令系统，实现毫秒级告警分发。
+4. **终端交互：** 纯静态前端，负责实时画面渲染与告警展示。
 
-## 目录说明
+## 🗺️ 项目演进路线
+- **MVP (当前目标) ✅：** 本地电脑摄像头 + YOLO 检测 + 网页流显示 + WebSocket 文字告警。
+- **V2.0：** 引入真实局域网 IP 摄像头 (RTSP流) + 多路画面平铺显示。
+- **V3.0：** 多摄像头物理拼接融合 + 3D/立体画面探索。
 
-```
+## 📁 目录结构
+```text
 yolo/
-├── scripts/           # 训练与调参
-├── data/              # 数据与 dataset.yaml（仅本地，不入 Git）
-├── logs/              # 日志与探针/调参结果 JSON
-├── runs/              # Ultralytics 训练输出
-├── server/            # 实时流服务
-├── app/               # 前端
-└── README.md
-```
-
-## 依赖
-
-```bash
-pip install -r requirements.txt
-```
-
-## 训练与最佳配置（推荐顺序）
-
-在仓库根目录执行。
-
-1. **性能探针**（子集 + 1 epoch，测最大 batch、workers、AMP）
-
-   ```bash
-   python3 scripts/benchmark_server.py
-   ```
-
-   输出 `logs/server_benchmark.json`；`train.py` 可自动读取。超参搜索的 batch/workers/数据路径写在 `scripts/hyperparameter_tuning.py` 的 `HARDWARE_PROFILE` 中，请与探针结果对齐后手改。
-
-2. **超参数搜索**（随机抽样多组配置，按验证指标打分）
-
-   ```bash
-   python3 scripts/hyperparameter_tuning.py
-   ```
-
-   结果见 `logs/tuning_results.json`；可按最佳配置回写 `scripts/train.py` 中的学习率、优化器、box/cls 等。
-
-3. **正式训练**
-
-   ```bash
-   python3 scripts/train.py
-   ```
-
-   若存在 `server_benchmark.json`，会使用其中的 `batch` / `workers` / `amp`；否则使用脚本内保守默认。
-
-## 日志
-
-训练日志在 `logs/`，文件名含时间戳。Linux 下可：`ls logs/`、`tail -f logs/*.log`。
-
-## 后续
-
-集成检测到实时流、IP 摄像头与多路拼接。
+├── backend/           # FastAPI 后端服务 (流媒体与信令)
+│   ├── main.py        # 路由定义与 WebSocket 管理
+│   └── camera.py      # 摄像头抓取与流转发逻辑
+├── frontend/          # 终端交互模块
+│   └── index.html     # 监控面板
+├── scripts/           # 训练与测试脚本
+│   ├── train.py       # 训练脚本
+│   ├── logger.py      # 日志工具
+│   └── test_cam.py    # 🚨 新增：本地摄像头算法测试脚本
+├── models/            # 模型权重
+│   └── person_best.pt # 核心：最优人员检测模型（mAP50=0.802）
+└── requirements.txt
