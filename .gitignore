@@ -62,6 +62,7 @@ kaggle.json
 .env.*.local
 secrets/
 credentials/
+.deploy_remote
 
 # ============================================================================
 # IDE????
