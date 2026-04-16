@@ -69,12 +69,13 @@ def train():
         log.warning("使用CPU")
     
     # 加载模型
-    model_path = 'yolov8n.pt'
+    model_path = 'yolo26x.pt'
     if Path(model_path).exists():
         model = YOLO(model_path)
         log.info(f"模型: {model_path}")
     else:
-        model = YOLO('yolov8n.pt')
+        model = YOLO('yolo26x.pt')
+        log.info("模型: yolo26x.pt (自动下载)")
     
     log.separator("-")
     log.info("开始训练...")

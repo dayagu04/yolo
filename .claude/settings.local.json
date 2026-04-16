@@ -15,7 +15,19 @@
       "Bash(\"C:/Program Files/python/python.exe\" -m pip list)",
       "Bash(python scripts/test_cam.py)",
       "Bash(kill %1)",
-      "Bash(python -c \"import cv2; cap = cv2.VideoCapture\\(0\\); print\\('backend:', cap.getBackendName\\(\\)\\); cap.release\\(\\)\")"
+      "Bash(python -c \"import cv2; cap = cv2.VideoCapture\\(0\\); print\\('backend:', cap.getBackendName\\(\\)\\); cap.release\\(\\)\")",
+      "Bash(python -c \"import sys, pathlib; p=str\\(pathlib.Path\\('backend/main.py'\\).resolve\\(\\).parent.parent\\); sys.path.insert\\(0,p\\); print\\(sys.path[:5]\\); import importlib.util; print\\(importlib.util.find_spec\\('backend'\\)\\); print\\(importlib.util.find_spec\\('backend.camera'\\)\\)\")",
+      "Bash(python -c \"import sys, pathlib; p=str\\(pathlib.Path\\('backend/main.py'\\).resolve\\(\\).parent.parent\\); sys.path.insert\\(0,p\\); import importlib.util; print\\(importlib.util.find_spec\\('backend'\\)\\); print\\(importlib.util.find_spec\\('backend.camera'\\)\\)\")",
+      "Bash(python backend/main.py)",
+      "Bash(python -c ' *)",
+      "Bash(netstat -ano)",
+      "Bash(findstr :8000)",
+      "Bash(tasklist /FI \"PID eq 35160\")",
+      "Bash(cmd /c \"tasklist /FI \\\\\"PID eq 35160\\\\\"\")",
+      "Bash(cmd /c \"netstat -ano | findstr :8000\")",
+      "Bash(python scripts/check_camera.py)",
+      "Bash(python -c \"from ultralytics import YOLO; print\\(YOLO.__doc__\\)\")",
+      "Bash(python -c \"import ultralytics; print\\(ultralytics.__version__\\)\")"
     ]
   }
 }
