@@ -1,10 +1,11 @@
 智能视频监控 MVP 阶段：前后端详细设计文档
 
 ## 版本说明
-- **文档版本：** v1.3
+- **文档版本：** v1.4
 - **最后更新：** 2026-04-16
 - **实现状态：** 本文档为系统设计的 Source of Truth，代码实现需与此文档保持一致
 - **v1.3 更新：** 新增 MySQL 告警存储、截图保存、Redis 实时统计、告警历史查询 API
+- **v1.4 更新（P0 稳定性）：** FastAPI lifespan 生命周期、健康检查细化、配置校验、截图定时清理、异常处理统一化
 
 ---
 
@@ -13,18 +14,64 @@
 
 ### 1.1 核心内部模块
 
+#### 应用生命周期管理器 (Application Lifespan)
+- 使用 FastAPI `lifespan` 上下文管理替代 `@app.on_event("startup") / @app.on_event("shutdown")`
+- 启动阶段（startup）：
+  1. 加载并校验 `config.yaml`
+  2. 初始化 MySQL 连接
+  3. 初始化 Redis 连接（可选）
+  4. 启动截图清理后台任务
+  5. 写入 `app.startup` 结构化日志
+- 关闭阶段（shutdown）：
+  1. 停止所有摄像头线程
+  2. 将摄像头从 Redis 在线集合移除
+  3. 停止截图清理后台任务
+  4. 写入 `app.shutdown` 结构化日志
+- **目标：** 消除 FastAPI 弃用告警，统一资源初始化与释放时序
+
+#### 配置管理模块 (Config Manager)
+- **实现文件：** `backend/config.py`
+- 职责：加载 `config.yaml`、校验必填项、类型与范围检查、支持环境变量覆盖
+- **必填项校验：**
+  - `database.host`、`database.user`、`database.password`、`database.database`
+- **范围校验：**
+  - `detection.conf_threshold`: 0.1 ~ 0.95
+  - `detection.detect_every_n`: 1 ~ 10
+  - `alert.cooldown_sec`: 0.5 ~ 60.0
+  - `alert.screenshot.quality`: 50 ~ 95
+  - `alert.screenshot.retention_days`: 1 ~ 365
+- **环境变量覆盖规则：** `YOLO_{SECTION}_{KEY}` 格式（全大写），例如：
+  - `YOLO_DATABASE_PASSWORD=xxx` 覆盖 `database.password`
+  - `YOLO_REDIS_ENABLED=true` 覆盖 `redis.enabled`
+- 校验失败时在启动阶段抛出 `ValueError`，打印错误详情后退出
+
+#### 截图清理任务 (Screenshot Cleanup)
+- **实现方式：** `lifespan` 启动时创建 `asyncio.Task`，每天执行一次
+- **执行时间：** 根据 `system.cleanup_schedule` 配置（默认 `03:00`）
+- **清理逻辑：**
+  1. 扫描 `alert.screenshot.save_dir` 目录下所有日期子目录
+  2. 删除超过 `retention_days` 天的整个日期目录
+  3. 同步调用 `DatabaseManager.delete_old_alerts(days=retention_days)` 删除对应数据库记录
+  4. 写入 `system.cleanup_done` 日志（包含删除文件数、删除记录数）
+- **异常处理：** 清理失败不影响主业务，仅写入 `system.cleanup_failed` error 日志
+
 #### 视频采集器 (Video Capturer)
 - 通过 OpenCV (cv2.VideoCapture) 独占式读取本地摄像头数据
 - **帧缓冲策略（MVP）：** 采用单帧覆盖模式（latest-frame），优先保证低延迟
   - 后台线程持续读取摄像头，最新帧覆盖旧帧
   - 适用场景：实时监控，延迟敏感
-  - V2.0 计划：可选 bounded queue 模式，适用于录制/回放场景
+- **分辨率策略：**
+  - `auto_resolution=true`（默认）：不强制设置分辨率，连接后读取实际值
+  - `auto_resolution=false`：设置 `width × height`，读回实际值后以实际值为准
+  - 连接成功后丢弃前 5 帧（DSHOW 曝光预热黑帧）
 - **断线重连机制：** 摄像头断开后自动重试 3 次，间隔 2/4/8 秒（指数退避）
+- **关键指标日志：** 每次 `_detect` 调用记录推理耗时（event: `inference.timing`）
 
 #### AI 推理引擎 (Inference Engine)
-- 加载 `person_best.pt` 模型权重
+- 加载 `detection.model_path` 配置的模型权重（默认 `models/person_best.pt`）
 - 从最新帧执行前向推理，获取目标边界框坐标、置信度与类别
 - 将边界框与告警信息绘制叠加到原始视频帧上
+- 推理异常时记录 `detection.error` 日志，降级为输出原始帧，不中断视频流
 
 #### 告警去重与人员状态管理器 (Alert Deduplication)
 - 告警目标：仅针对”新出现人员”触发告警，避免重复告警刷屏

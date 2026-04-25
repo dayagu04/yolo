@@ -1,12 +1,11 @@
 import asyncio
 import sys
 import time
-import yaml
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
-# 确保项目根目录在 sys.path 中
 ROOT = Path(__file__).parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -16,12 +15,11 @@ from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSO
 import uvicorn
 
 from backend.camera import CameraManager
+from backend.config import load_and_validate_config, ConfigError
 from backend.logging_system import structured_logger
 from backend.schemas import DetectionConfig
 from backend.database import DatabaseManager
 from backend.redis_stats import RedisStats
-
-app = FastAPI(title="智能视频监控")
 
 # ------------------------------------------------------------------ #
 #  全局状态
@@ -31,25 +29,151 @@ START_TS = time.time()
 cameras: dict[int, CameraManager] = {}
 _ws_clients: list[WebSocket] = []
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
-
-# 配置与数据库
 config: dict = {}
 db_manager: Optional[DatabaseManager] = None
 redis_stats: Optional[RedisStats] = None
+_cleanup_task: Optional[asyncio.Task] = None
 
 
 # ------------------------------------------------------------------ #
-#  配置加载
+#  截图定时清理任务
 # ------------------------------------------------------------------ #
 
-def load_config() -> dict:
-    """加载 config.yaml 配置文件"""
-    config_path = ROOT / "config.yaml"
-    if not config_path.exists():
-        raise FileNotFoundError(f"配置文件不存在: {config_path}")
+async def _run_cleanup():
+    """按 system.cleanup_schedule 每天执行一次清理"""
+    schedule = config.get("system", {}).get("cleanup_schedule", "03:00")
+    retention_days = (
+        config.get("alert", {}).get("screenshot", {}).get("retention_days", 30)
+    )
+    save_dir = (
+        config.get("alert", {}).get("screenshot", {}).get("save_dir", "data/screenshots")
+    )
 
-    with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    while True:
+        # 计算下次执行时间
+        now = datetime.now()
+        try:
+            hour, minute = map(int, schedule.split(":"))
+        except Exception:
+            hour, minute = 3, 0
+
+        next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if next_run <= now:
+            next_run += timedelta(days=1)
+
+        wait_sec = (next_run - now).total_seconds()
+        await asyncio.sleep(wait_sec)
+
+        await asyncio.get_event_loop().run_in_executor(
+            None, _do_cleanup, save_dir, retention_days
+        )
+
+
+def _do_cleanup(save_dir: str, retention_days: int):
+    """执行截图与数据库清理（在线程池中运行）"""
+    try:
+        screenshots_root = ROOT / save_dir
+        cutoff = datetime.now() - timedelta(days=retention_days)
+        removed_dirs = 0
+
+        if screenshots_root.exists():
+            for day_dir in sorted(screenshots_root.iterdir()):
+                if not day_dir.is_dir():
+                    continue
+                try:
+                    dir_date = datetime.strptime(day_dir.name, "%Y-%m-%d")
+                    if dir_date < cutoff:
+                        import shutil
+                        shutil.rmtree(day_dir, ignore_errors=True)
+                        removed_dirs += 1
+                except ValueError:
+                    pass
+
+        db_deleted = 0
+        if db_manager:
+            db_deleted = db_manager.delete_old_alerts(days=retention_days)
+
+        structured_logger.log(
+            "info", "system.cleanup_done",
+            f"定时清理完成: 删除 {removed_dirs} 个目录, {db_deleted} 条数据库记录",
+            data={"removed_dirs": removed_dirs, "db_deleted": db_deleted,
+                  "retention_days": retention_days},
+        )
+    except Exception as e:
+        structured_logger.log(
+            "error", "system.cleanup_failed", f"定时清理失败: {e}"
+        )
+
+
+# ------------------------------------------------------------------ #
+#  应用生命周期（lifespan）
+# ------------------------------------------------------------------ #
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _event_loop, config, db_manager, redis_stats, _cleanup_task
+    _event_loop = asyncio.get_running_loop()
+
+    # ── 启动阶段 ──
+    # 1. 加载并校验配置
+    try:
+        config = load_and_validate_config(ROOT / "config.yaml")
+    except ConfigError as e:
+        print(f"\n[ERROR] 配置校验失败，服务无法启动:\n{e}\n")
+        raise SystemExit(1)
+    except Exception as e:
+        print(f"\n[ERROR] 配置加载异常: {e}\n")
+        raise SystemExit(1)
+
+    # 2. 初始化 MySQL
+    if config.get("database"):
+        try:
+            db_manager = DatabaseManager(config["database"])
+            db_manager.create_tables()
+            print("数据库连接成功")
+        except Exception as e:
+            print(f"[WARN] 数据库连接失败（告警将不持久化）: {e}")
+            db_manager = None
+
+    # 3. 初始化 Redis（可选）
+    if config.get("redis"):
+        try:
+            redis_stats = RedisStats(config["redis"])
+            if redis_stats.is_enabled():
+                print("Redis 连接成功")
+        except Exception as e:
+            print(f"[WARN] Redis 连接失败（实时统计不可用）: {e}")
+            redis_stats = None
+
+    # 4. 启动截图定时清理任务
+    _cleanup_task = asyncio.create_task(_run_cleanup())
+
+    structured_logger.log("info", "app.startup", "服务启动完成")
+
+    yield  # ── 应用运行阶段 ──
+
+    # ── 关闭阶段 ──
+    # 1. 停止所有摄像头线程
+    for cam in cameras.values():
+        try:
+            cam.stop()
+            if redis_stats and redis_stats.is_enabled():
+                redis_stats.set_camera_offline(cam.camera_id)
+        except Exception:
+            pass
+
+    # 2. 停止清理任务
+    if _cleanup_task and not _cleanup_task.done():
+        _cleanup_task.cancel()
+        try:
+            await _cleanup_task
+        except asyncio.CancelledError:
+            pass
+
+    structured_logger.log("info", "app.shutdown", "服务已关闭")
+
+
+app = FastAPI(title="智能视频监控", lifespan=lifespan)
 
 
 # ------------------------------------------------------------------ #
@@ -69,68 +193,18 @@ async def _broadcast(message: dict):
 
 
 def _dispatch_signal(message: dict):
-    global _event_loop
     if _event_loop is not None and _event_loop.is_running():
         _event_loop.call_soon_threadsafe(asyncio.create_task, _broadcast(message))
 
 
 # ------------------------------------------------------------------ #
-#  摄像头信号回调（camera 线程 -> 主事件循环）
+#  摄像头信号回调（camera 线程 → 主事件循环）
 # ------------------------------------------------------------------ #
 
 def _camera_signal_callback(message: dict):
-    # log 类型同时写入结构化日志缓冲
     if message.get("type") == "log":
         structured_logger._buffer.append(message)
     _dispatch_signal(message)
-
-
-# ------------------------------------------------------------------ #
-#  应用生命周期
-# ------------------------------------------------------------------ #
-
-@app.on_event("startup")
-async def on_startup():
-    global _event_loop, config, db_manager, redis_stats
-    _event_loop = asyncio.get_running_loop()
-
-    # 加载配置
-    try:
-        config = load_config()
-        print(f"配置文件加载成功: {len(config)} 个配置项")
-    except Exception as e:
-        print(f"配置文件加载失败: {e}")
-        config = {}
-
-    # 初始化数据库
-    if config.get("database"):
-        try:
-            db_manager = DatabaseManager(config["database"])
-            db_manager.create_tables()
-            print("数据库连接成功")
-        except Exception as e:
-            print(f"数据库连接失败: {e}")
-            db_manager = None
-
-    # 初始化 Redis
-    if config.get("redis"):
-        try:
-            redis_stats = RedisStats(config["redis"])
-            if redis_stats.is_enabled():
-                print("Redis 连接成功")
-        except Exception as e:
-            print(f"Redis 连接失败: {e}")
-            redis_stats = None
-
-    entry = structured_logger.log("info", "app.startup", "服务启动完成")
-    _dispatch_signal(entry)
-
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    for cam in cameras.values():
-        cam.stop()
-    structured_logger.log("info", "app.shutdown", "服务已关闭")
 
 
 # ------------------------------------------------------------------ #
@@ -143,7 +217,6 @@ def get_camera(camera_id: int = 0) -> CameraManager:
         alert_cfg = config.get("alert", {})
         screenshot_cfg = alert_cfg.get("screenshot", {})
 
-        # 分辨率配置：auto_resolution=true 时使用 None（自动获取）
         auto_resolution = cam_cfg.get("auto_resolution", True)
         width = None if auto_resolution else cam_cfg.get("width")
         height = None if auto_resolution else cam_cfg.get("height")
@@ -158,14 +231,12 @@ def get_camera(camera_id: int = 0) -> CameraManager:
             screenshot_config=screenshot_cfg,
         )
 
-        # 应用检测配置
         det_cfg = config.get("detection", {})
         if det_cfg.get("conf_threshold") is not None:
             cameras[camera_id].conf_threshold = float(det_cfg["conf_threshold"])
         if det_cfg.get("detect_every_n") is not None:
             cameras[camera_id].detect_every_n = int(det_cfg["detect_every_n"])
 
-        # 应用告警配置
         if alert_cfg.get("cooldown_sec") is not None:
             cameras[camera_id]._alert_cooldown_sec = float(alert_cfg["cooldown_sec"])
         if alert_cfg.get("track_ttl_sec") is not None:
@@ -173,11 +244,12 @@ def get_camera(camera_id: int = 0) -> CameraManager:
 
         cameras[camera_id].start()
 
-        # Redis 标记摄像头在线
         if redis_stats and redis_stats.is_enabled():
             redis_stats.set_camera_online(camera_id)
 
-        entry = structured_logger.log("info", "camera.created", "摄像头实例已创建", camera_id=camera_id)
+        entry = structured_logger.log(
+            "info", "camera.created", "摄像头实例已创建", camera_id=camera_id
+        )
         _dispatch_signal(entry)
     return cameras[camera_id]
 
@@ -200,7 +272,9 @@ async def websocket_alert(websocket: WebSocket):
         while True:
             payload = await websocket.receive_text()
             if payload == "ping":
-                await websocket.send_json({"type": "pong", "timestamp": structured_logger._iso_now()})
+                await websocket.send_json(
+                    {"type": "pong", "timestamp": structured_logger._iso_now()}
+                )
     except WebSocketDisconnect:
         pass
     finally:
@@ -256,27 +330,51 @@ async def camera_status(camera_id: int):
 # ------------------------------------------------------------------ #
 
 @app.get("/api/logs")
-async def get_logs(limit: int = 100):
+async def get_logs(limit: int = Query(100, ge=1, le=500)):
     logs = structured_logger.get_recent_logs(limit)
     return {"count": len(logs), "logs": logs}
 
 
 # ------------------------------------------------------------------ #
-#  健康检查
+#  健康检查（细化）
 # ------------------------------------------------------------------ #
 
 @app.get("/health")
 async def health():
     camera_stats = [cam.get_status() for cam in cameras.values()]
-    # 任意摄像头断线或模型未加载则降级
-    all_ok = all(s["connected"] and s["model_loaded"] for s in camera_stats) if camera_stats else True
-    status = "ok" if all_ok else "degraded"
+
+    # db 子状态
+    db_ok = False
+    if db_manager:
+        try:
+            from sqlalchemy import text
+            with db_manager.engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            db_ok = True
+        except Exception:
+            db_ok = False
+
+    # redis 子状态
+    redis_ok = redis_stats.is_enabled() if redis_stats else False
+
+    # model 子状态（任意摄像头模型已加载则视为 ok）
+    model_ok = any(s.get("model_loaded") for s in camera_stats) if camera_stats else False
+
+    # 总体状态
+    cams_ok = all(s["connected"] and s["model_loaded"] for s in camera_stats) if camera_stats else True
+    status = "ok" if (cams_ok and (db_manager is None or db_ok)) else "degraded"
+
     return {
         "status": status,
         "timestamp": structured_logger._iso_now(),
         "uptime_sec": int(time.time() - START_TS),
         "ws_clients": len(_ws_clients),
         "camera_count": len(cameras),
+        "subsystems": {
+            "database": "ok" if db_ok else ("disabled" if db_manager is None else "error"),
+            "redis": "ok" if redis_ok else ("disabled" if not (redis_stats and redis_stats.enabled) else "error"),
+            "model": "ok" if model_ok else ("not_loaded" if camera_stats else "no_camera"),
+        },
         "cameras": camera_stats,
     }
 
@@ -293,43 +391,39 @@ async def get_alerts(
     start_time: Optional[str] = Query(None),
     end_time: Optional[str] = Query(None),
     level: Optional[str] = Query(None),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
 ):
-    """查询告警历史记录"""
     if not db_manager:
         raise HTTPException(status_code=503, detail="数据库未配置")
-
     try:
-        # 解析时间参数
         start_dt = datetime.fromisoformat(start_time) if start_time else None
         end_dt = datetime.fromisoformat(end_time) if end_time else None
-
         result = db_manager.query_alerts(
-            limit=limit,
-            offset=offset,
-            camera_id=camera_id,
-            start_time=start_dt,
-            end_time=end_dt,
-            level=level,
+            limit=limit, offset=offset, camera_id=camera_id,
+            start_time=start_dt, end_time=end_dt, level=level, order=order,
         )
         result["limit"] = limit
         result["offset"] = offset
         return result
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=f"时间格式错误: {e}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"查询失败: {e}")
 
 
 @app.get("/api/alerts/{alert_id}/screenshot")
 async def get_alert_screenshot(alert_id: int):
-    """获取告警截图"""
     if not db_manager:
         raise HTTPException(status_code=503, detail="数据库未配置")
-
     try:
         alert = db_manager.get_alert_by_id(alert_id)
         if not alert or not alert.screenshot_path:
             raise HTTPException(status_code=404, detail="截图不存在")
 
-        screenshot_file = ROOT / "screenshots" / alert.screenshot_path
+        save_dir = config.get("alert", {}).get("screenshot", {}).get(
+            "save_dir", "data/screenshots"
+        )
+        screenshot_file = ROOT / save_dir / alert.screenshot_path
         if not screenshot_file.exists():
             raise HTTPException(status_code=404, detail="截图文件已删除")
 
@@ -337,7 +431,40 @@ async def get_alert_screenshot(alert_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取截图失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取截图失败: {e}")
+
+
+# ------------------------------------------------------------------ #
+#  手动清理（测试用）
+# ------------------------------------------------------------------ #
+
+@app.post("/api/cleanup")
+async def manual_cleanup():
+    """手动触发截图和数据库清理（测试用）"""
+    if not config:
+        raise HTTPException(status_code=503, detail="配置未加载")
+
+    retention_days = (
+        config.get("alert", {}).get("screenshot", {}).get("retention_days", 30)
+    )
+    save_dir = (
+        config.get("alert", {}).get("screenshot", {}).get("save_dir", "data/screenshots")
+    )
+
+    try:
+        await asyncio.get_event_loop().run_in_executor(
+            None, _do_cleanup, save_dir, retention_days
+        )
+        return {
+            "status": "ok",
+            "message": "清理任务已执行",
+            "timestamp": structured_logger._iso_now(),
+            "retention_days": retention_days,
+            "save_dir": save_dir,
+        }
+    except Exception as e:
+        structured_logger.log("error", "system.cleanup_failed", f"手动清理失败: {e}")
+        raise HTTPException(status_code=500, detail=f"清理失败: {e}")
 
 
 # ------------------------------------------------------------------ #
@@ -346,24 +473,19 @@ async def get_alert_screenshot(alert_id: int):
 
 @app.get("/api/stats")
 async def get_stats():
-    """获取 Redis 实时统计数据"""
     if not redis_stats or not redis_stats.is_enabled():
-        return JSONResponse(
-            status_code=503,
-            content={"error": "Redis 统计功能未启用"}
-        )
-
+        return JSONResponse(status_code=503, content={"error": "Redis 统计功能未启用"})
     try:
         return redis_stats.get_all_stats()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取统计数据失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取统计数据失败: {e}")
 
 
 # ------------------------------------------------------------------ #
 #  前端页面
 # ------------------------------------------------------------------ #
 
-FRONTEND = Path(__file__).parent.parent / "frontend"
+FRONTEND = ROOT / "frontend"
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -373,7 +495,12 @@ async def root():
 
 if __name__ == "__main__":
     import logging
-    # 屏蔽 uvicorn 的 "Uvicorn running on http://0.0.0.0:8000" 误导性输出
     logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
+    srv_cfg = config.get("server", {}) if config else {}
     print("启动监控服务器 -> http://localhost:8000")
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run(
+        app,
+        host=srv_cfg.get("host", "0.0.0.0"),
+        port=srv_cfg.get("port", 8000),
+        reload=False,
+    )

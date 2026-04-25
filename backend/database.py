@@ -142,9 +142,12 @@ class DatabaseManager:
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
         level: Optional[str] = None,
+        order: str = "desc",
     ) -> Dict[str, any]:
         """
         查询告警记录
+        Args:
+            order: 排序方式 "asc" 或 "desc"
         Returns:
             {"total": int, "alerts": List[dict]}
         """
@@ -166,8 +169,9 @@ class DatabaseManager:
             total = query.count()
 
             # 分页查询
+            order_by = Alert.timestamp.desc() if order == "desc" else Alert.timestamp.asc()
             alerts = (
-                query.order_by(Alert.timestamp.desc())
+                query.order_by(order_by)
                 .limit(limit)
                 .offset(offset)
                 .all()

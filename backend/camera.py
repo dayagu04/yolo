@@ -36,6 +36,7 @@ class CameraManager:
         self.db_manager = db_manager
         self.redis_stats = redis_stats
         self.screenshot_config = screenshot_config or {}
+        self._last_screenshot_ts: float = 0.0
 
         self.cap: Optional[cv2.VideoCapture] = None
         self.frame = None
@@ -234,6 +235,9 @@ class CameraManager:
                 self._fps = instant_fps if self._fps == 0 else (self._fps * 0.9 + instant_fps * 0.1)
             self._last_fps_ts = now
 
+            # 不在捕获线程中 sleep，让摄像头以最大速度读取
+            # 这样可以避免缓冲区积压导致延迟
+
     def get_frame(self) -> Optional[np.ndarray]:
         with self.lock:
             return self.frame.copy() if self.frame is not None else None
@@ -317,14 +321,15 @@ class CameraManager:
         return active_track_ids
 
     def _save_screenshot(self, frame: np.ndarray) -> Optional[str]:
-        """保存截图，返回相对路径"""
+        """保存截图，返回相对路径（配置的 save_dir 下按日期分目录）"""
         try:
-            screenshots_dir = ROOT / "screenshots"
-            date_str = datetime.now().strftime("%Y%m%d")
+            save_dir = self.screenshot_config.get("save_dir", "data/screenshots")
+            screenshots_dir = ROOT / save_dir
+            date_str = datetime.now().strftime("%Y-%m-%d")
             day_dir = screenshots_dir / date_str
             day_dir.mkdir(parents=True, exist_ok=True)
 
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+            timestamp = datetime.now().strftime("%H%M%S_%f")[:-3]
             filename = f"cam{self.camera_id}_{timestamp}.jpg"
             filepath = day_dir / filename
 
@@ -335,6 +340,20 @@ class CameraManager:
         except Exception as e:
             self._emit_log("error", "screenshot.save_failed", f"截图保存失败: {e}")
             return None
+
+    def _should_save_screenshot(self, now_ts: float) -> bool:
+        """根据 save_mode 判断是否需要保存截图"""
+        if not self.screenshot_config.get("enabled", True):
+            return False
+        mode = self.screenshot_config.get("save_mode", "first_only")
+        if mode == "all":
+            return True
+        if mode == "first_only":
+            return self._alert_total == 0
+        if mode == "interval":
+            interval = self.screenshot_config.get("interval_sec", 10)
+            return now_ts - self._last_screenshot_ts >= interval
+        return False
 
     def _emit_alert_for_new_tracks(self, active_track_ids: list[int], person_count: int, now_ts: float, frame: np.ndarray):
         pending = [tid for tid in active_track_ids if not self._tracks.get(tid, {}).get("alerted")]
@@ -350,15 +369,14 @@ class CameraManager:
             if tid in self._tracks:
                 self._tracks[tid]["alerted"] = True
 
-        self._alert_total += 1
-
         # 保存截图
         screenshot_path = None
-        save_mode = self.screenshot_config.get("save_mode", "first_only")
-        if save_mode == "first_only" and self._alert_total == 1:
+        if self._should_save_screenshot(now_ts):
             screenshot_path = self._save_screenshot(frame)
-        elif save_mode == "all":
-            screenshot_path = self._save_screenshot(frame)
+            if screenshot_path:
+                self._last_screenshot_ts = now_ts
+
+        self._alert_total += 1
 
         # 写入数据库
         if self.db_manager:
@@ -425,10 +443,12 @@ class CameraManager:
     # ------------------------------------------------------------------ #
 
     def get_frame_generator(self) -> Generator[bytes, None, None]:
+        last_encode_ts = time.time()
+
         while self.running:
             frame = self.get_frame()
             if frame is None:
-                time.sleep(0.033)
+                time.sleep(0.01)  # 减少空闲等待时间
                 continue
 
             self._frame_count += 1
@@ -458,7 +478,15 @@ class CameraManager:
                     + b"\r\n"
                 )
 
-            time.sleep(0.033)  # ~30 fps
+            # 动态调整帧率：根据实际处理时间调整 sleep
+            now = time.time()
+            elapsed = now - last_encode_ts
+            last_encode_ts = now
+
+            # 目标 30 fps (33ms/frame)，减去已用时间
+            target_interval = 0.033
+            sleep_time = max(0.001, target_interval - elapsed)
+            time.sleep(sleep_time)
 
     # ------------------------------------------------------------------ #
     #  运行时配置（供 API 调用）

@@ -48,7 +48,7 @@ database:
   host: "localhost"
   port: 3306
   user: "root"
-  password: "your_password"          # 请修改为实际密码
+  password: "Rudai2003"          # 请修改为实际密码
   database: "security_monitor"
   charset: "utf8mb4"
   pool_size: 5                       # 连接池大小

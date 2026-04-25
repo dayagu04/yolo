@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional
 import json
 import logging
+import sys
 
 
 class StructuredLogger:
@@ -15,7 +16,9 @@ class StructuredLogger:
         self.logger.setLevel(logging.INFO)
 
         if not self.logger.handlers:
-            handler = logging.StreamHandler()
+            # 强制使用 UTF-8 输出，避免 Windows 控制台 GBK 编码导致中文乱码
+            stream = open(sys.stdout.fileno(), mode="w", encoding="utf-8", buffering=1, closefd=False)
+            handler = logging.StreamHandler(stream)
             handler.setFormatter(logging.Formatter("%(message)s"))
             self.logger.addHandler(handler)
 

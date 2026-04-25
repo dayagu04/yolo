@@ -28,7 +28,18 @@
       "Bash(python scripts/check_camera.py)",
       "Bash(python -c \"from ultralytics import YOLO; print\\(YOLO.__doc__\\)\")",
       "Bash(python -c \"import ultralytics; print\\(ultralytics.__version__\\)\")",
-      "Bash(python -c \"import torch; torch.load\\('n:/yolo/yolo26n.pt', map_location='cpu'\\)\")"
+      "Bash(python -c \"import torch; torch.load\\('n:/yolo/yolo26n.pt', map_location='cpu'\\)\")",
+      "Bash(python -c \"from backend.config import load_and_validate_config; from pathlib import Path; cfg = load_and_validate_config\\(Path\\('config.yaml'\\)\\); print\\('配置校验通过'\\); print\\(f'数据库: {cfg[\\\\\"database\\\\\"][\\\\\"host\\\\\"]}:{cfg[\\\\\"database\\\\\"][\\\\\"port\\\\\"]}/{cfg[\\\\\"database\\\\\"][\\\\\"database\\\\\"]}'\\); print\\(f'Redis: {cfg[\\\\\"redis\\\\\"][\\\\\"enabled\\\\\"]}'\\)\")",
+      "Bash(curl -s http://localhost:8000/health)",
+      "Bash(python -m json.tool)",
+      "Bash(curl -s http://localhost:8000/api/logs?limit=5)",
+      "Bash(curl -s \"http://localhost:8000/api/alerts?limit=5\")",
+      "Bash(curl -s http://localhost:8000/api/stats)",
+      "Bash(curl -s http://localhost:8000/api/camera/0/status)",
+      "Bash(curl -s -X POST http://localhost:8000/api/camera/0/start)",
+      "Bash(curl -s \"http://localhost:8000/api/alerts?limit=10\")",
+      "Bash(curl -s \"http://localhost:8000/api/cameras\")",
+      "Bash(curl -s \"http://localhost:8000/api/logs?limit=20\")"
     ]
   }
 }
