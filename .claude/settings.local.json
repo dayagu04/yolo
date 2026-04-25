@@ -27,7 +27,8 @@
       "Bash(cmd /c \"netstat -ano | findstr :8000\")",
       "Bash(python scripts/check_camera.py)",
       "Bash(python -c \"from ultralytics import YOLO; print\\(YOLO.__doc__\\)\")",
-      "Bash(python -c \"import ultralytics; print\\(ultralytics.__version__\\)\")"
+      "Bash(python -c \"import ultralytics; print\\(ultralytics.__version__\\)\")",
+      "Bash(python -c \"import torch; torch.load\\('n:/yolo/yolo26n.pt', map_location='cpu'\\)\")"
     ]
   }
 }

@@ -25,11 +25,17 @@ class CameraManager:
         width: Optional[int] = None,
         height: Optional[int] = None,
         signal_callback: Optional[Callable[[dict], None]] = None,
+        db_manager=None,
+        redis_stats=None,
+        screenshot_config: Optional[dict] = None,
     ):
         self.camera_id = camera_id
         self.width = width
         self.height = height
         self.signal_callback = signal_callback
+        self.db_manager = db_manager
+        self.redis_stats = redis_stats
+        self.screenshot_config = screenshot_config or {}
 
         self.cap: Optional[cv2.VideoCapture] = None
         self.frame = None
@@ -310,7 +316,27 @@ class CameraManager:
 
         return active_track_ids
 
-    def _emit_alert_for_new_tracks(self, active_track_ids: list[int], person_count: int, now_ts: float):
+    def _save_screenshot(self, frame: np.ndarray) -> Optional[str]:
+        """保存截图，返回相对路径"""
+        try:
+            screenshots_dir = ROOT / "screenshots"
+            date_str = datetime.now().strftime("%Y%m%d")
+            day_dir = screenshots_dir / date_str
+            day_dir.mkdir(parents=True, exist_ok=True)
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+            filename = f"cam{self.camera_id}_{timestamp}.jpg"
+            filepath = day_dir / filename
+
+            quality = self.screenshot_config.get("quality", 75)
+            cv2.imwrite(str(filepath), frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+
+            return f"{date_str}/{filename}"
+        except Exception as e:
+            self._emit_log("error", "screenshot.save_failed", f"截图保存失败: {e}")
+            return None
+
+    def _emit_alert_for_new_tracks(self, active_track_ids: list[int], person_count: int, now_ts: float, frame: np.ndarray):
         pending = [tid for tid in active_track_ids if not self._tracks.get(tid, {}).get("alerted")]
         if not pending:
             return
@@ -325,6 +351,35 @@ class CameraManager:
                 self._tracks[tid]["alerted"] = True
 
         self._alert_total += 1
+
+        # 保存截图
+        screenshot_path = None
+        save_mode = self.screenshot_config.get("save_mode", "first_only")
+        if save_mode == "first_only" and self._alert_total == 1:
+            screenshot_path = self._save_screenshot(frame)
+        elif save_mode == "all":
+            screenshot_path = self._save_screenshot(frame)
+
+        # 写入数据库
+        if self.db_manager:
+            try:
+                self.db_manager.create_alert(
+                    camera_id=self.camera_id,
+                    person_count=person_count,
+                    screenshot_path=screenshot_path,
+                )
+            except Exception as e:
+                self._emit_log("error", "db.insert_failed", f"告警记录写入失败: {e}")
+
+        # 更新 Redis 统计
+        if self.redis_stats:
+            try:
+                self.redis_stats.incr_alert_count(self.camera_id)
+                self.redis_stats.update_camera_persons(self.camera_id, person_count)
+                self.redis_stats.record_hourly_alert(self.camera_id)
+            except Exception as e:
+                self._emit_log("error", "redis.update_failed", f"Redis 统计更新失败: {e}")
+
         self._emit(
             AlertMessage(
                 timestamp=self._now_iso(),
@@ -335,6 +390,7 @@ class CameraManager:
                     "person_count": person_count,
                     "new_track_ids": pending,
                     "active_tracks": len(self._tracks),
+                    "screenshot_path": screenshot_path,
                 },
             ).model_dump()
         )
@@ -357,7 +413,7 @@ class CameraManager:
                 bbox_list.append((float(x1), float(y1), float(x2), float(y2)))
 
         active_track_ids = self._associate_tracks(bbox_list, now_ts)
-        self._emit_alert_for_new_tracks(active_track_ids, person_count, now_ts)
+        self._emit_alert_for_new_tracks(active_track_ids, person_count, now_ts, frame)
 
         annotated = results[0].plot()
         return annotated, person_count

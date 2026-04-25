@@ -94,9 +94,9 @@ def train():
             data='data/dataset.yaml',
             epochs=150,
             imgsz=640,
-            batch=128,
+            batch=8,
             patience=30,
-            project='runs',
+            project='runs/detect/tmp',
             name='person_best_config',
             device=device,
             pretrained=True,
@@ -123,7 +123,7 @@ def train():
         log.log_elapsed_time()
         
         # Ultralytics 会将 project/name 放在 runs/detect/ 下
-        best_model = "runs/detect/runs/person_best_config/weights/best.pt"
+        best_model = "runs/detect/tmp/person_best_config/weights/best.pt"
         log.info(f"最佳模型: {best_model}")
         
         if results and hasattr(results, 'results_dict'):

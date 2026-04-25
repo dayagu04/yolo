@@ -9,6 +9,15 @@ numpy>=1.24.0
 Pillow>=10.0.0
 pyyaml>=6.0
 tqdm>=4.65.0
+
+# 数据库相关
+sqlalchemy>=2.0.0
+pymysql>=1.1.0
+cryptography>=41.0.0
+
+# Redis 相关（可选）
+redis>=5.0.0
+
 # 可选：用于报警或高级功能
 # playsound>=1.3.0
 # firebase-admin

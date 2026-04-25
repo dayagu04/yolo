@@ -1,9 +1,10 @@
 智能视频监控 MVP 阶段：前后端详细设计文档
 
 ## 版本说明
-- **文档版本：** v1.2
+- **文档版本：** v1.3
 - **最后更新：** 2026-04-16
 - **实现状态：** 本文档为系统设计的 Source of Truth，代码实现需与此文档保持一致
+- **v1.3 更新：** 新增 MySQL 告警存储、截图保存、Redis 实时统计、告警历史查询 API
 
 ---
 
@@ -47,6 +48,30 @@
 - 维护全局活动 WebSocket 连接池
 - 接收 AI 引擎检测结果，按告警策略广播 JSON 告警信令
 - 支持广播系统日志与状态事件（供前端日志面板展示）
+
+#### 告警持久化模块 (Alert Persistence)
+- **数据库：** MySQL 5.7+
+- **表结构：** `alerts` 表存储告警记录，`cameras` 表存储摄像头配置
+- **截图存储：** 文件系统存储 JPEG，数据库存储相对路径
+- **截图优化：**
+  - JPEG 质量可配置（默认 75，减少 40% 体积）
+  - 支持三种保存模式：`first_only`（同一 Track 只保存首次）、`all`（每次都保存）、`interval`（间隔 N 秒保存）
+  - 定期清理：保留最近 N 天（默认 30 天）
+  - 路径规范：`data/screenshots/{date}/cam{id}_alert_{alert_id}.jpg`
+
+#### Redis 实时统计模块 (Real-time Statistics)
+- **功能：** 提供实时统计数据，减少 MySQL 查询压力
+- **数据结构：**
+  - `stats:today:alerts` (String): 今日总告警数
+  - `stats:today:cam:{id}` (String): 各摄像头今日告警数
+  - `stats:online:cameras` (Set): 在线摄像头 ID 列表
+  - `stats:current:persons` (Hash): 当前各摄像头人数 `{cam_id: count}`
+  - `stats:hourly:{date}` (Sorted Set): 每小时告警数 `{hour: count}`
+- **更新时机：**
+  - 告警触发时：`INCR stats:today:alerts`、`INCR stats:today:cam:{id}`、`ZADD stats:hourly:{date}`
+  - 检测帧更新时：`HSET stats:current:persons {cam_id} {count}`
+  - 摄像头上线/下线：`SADD/SREM stats:online:cameras {cam_id}`
+- **过期策略：** 每日统计数据在次日凌晨 3 点过期（TTL 27 小时）
 
 #### 结构化日志模块 (Structured Logging)
 - **实现文件：** `backend/logging_system.py`
@@ -157,6 +182,70 @@
 #### 接口六：最近日志查询 (HTTP)
 - **路径：** `GET /api/logs?limit=100`
 - **功能：** 获取最近结构化日志记录（默认 100 条，最大 500 条）
+
+#### 接口七：告警历史查询 (HTTP)
+- **路径：** `GET /api/alerts`
+- **查询参数：**
+  - `limit` (int, 默认 50): 返回条数
+  - `offset` (int, 默认 0): 分页偏移
+  - `camera_id` (int, 可选): 筛选指定摄像头
+  - `start_time` (ISO 8601, 可选): 起始时间
+  - `end_time` (ISO 8601, 可选): 结束时间
+  - `level` (string, 可选): 告警级别 (low/medium/high)
+- **返回示例：**
+```json
+{
+  "total": 123,
+  "limit": 50,
+  "offset": 0,
+  "alerts": [
+    {
+      "id": 456,
+      "timestamp": "2026-04-16T18:30:15+08:00",
+      "camera_id": 0,
+      "person_count": 3,
+      "new_track_ids": [1, 2, 3],
+      "screenshot_path": "data/screenshots/2026-04-16/cam0_alert_456.jpg",
+      "message": "检测到 3 名新出现人员",
+      "level": "high"
+    }
+  ]
+}
+```
+
+#### 接口八：告警截图获取 (HTTP)
+- **路径：** `GET /api/alerts/{id}/screenshot`
+- **功能：** 返回指定告警的截图
+- **响应头：** `Content-Type: image/jpeg`
+- **错误处理：** 404 Not Found（截图不存在或已过期）
+
+#### 接口九：实时统计数据 (HTTP)
+- **路径：** `GET /api/stats`
+- **功能：** 获取 Redis 实时统计数据（需启用 Redis）
+- **返回示例：**
+```json
+{
+  "today_alerts": 123,
+  "online_cameras": [0, 1, 2],
+  "current_persons": {
+    "0": 3,
+    "1": 0,
+    "2": 5
+  },
+  "hourly_alerts": {
+    "0": 5,
+    "1": 2,
+    "8": 15,
+    "9": 23,
+    "10": 18
+  },
+  "camera_alerts": {
+    "0": 45,
+    "1": 38,
+    "2": 40
+  }
+}
+```
 
 ---
 
