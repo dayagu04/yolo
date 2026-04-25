@@ -1,0 +1,196 @@
+"""
+飞书告警推送模块
+支持群机器人 Webhook 和直接消息（OpenAPI）
+"""
+import time
+import asyncio
+import logging
+from typing import Optional, Dict, List
+from pathlib import Path
+import aiohttp
+
+
+class FeishuNotifier:
+    """飞书推送通知器"""
+
+    def __init__(self, config: dict):
+        self.config = config
+        self.logger = logging.getLogger(__name__)
+
+        # 配置参数
+        self.enabled = config.get("enabled", False)
+        self.app_id = config.get("app_id", "")
+        self.app_secret = config.get("app_secret", "")
+        self.webhook_url = config.get("webhook_url", "")
+        self.user_open_ids: List[str] = config.get("user_open_ids", [])
+
+        # 推送控制
+        self.push_cooldown_sec = config.get("push_cooldown_sec", 60)
+        self.push_level = config.get("push_level", "high")
+        self.include_screenshot = config.get("include_screenshot", True)
+
+        self._last_push_ts = 0.0
+        self._tenant_token: Optional[str] = None
+        self._token_expire_ts = 0.0
+
+        if not self.enabled:
+            self.logger.info("飞书推送未启用")
+        elif not self.app_id or not self.app_secret:
+            self.logger.warning("飞书推送已启用，但缺少 app_id 或 app_secret")
+
+    async def send_alert(self, alert: dict, screenshot_path: Optional[str] = None):
+        """
+        发送告警推送
+        Args:
+            alert: 告警消息字典（AlertMessage.model_dump()）
+            screenshot_path: 截图相对路径（可选）
+        """
+        if not self.enabled:
+            return
+
+        # 推送冷却控制
+        now = time.time()
+        if now - self._last_push_ts < self.push_cooldown_sec:
+            return
+
+        # 级别过滤
+        alert_level = alert.get("level", "high")
+        if not self._should_push_level(alert_level):
+            return
+
+        self._last_push_ts = now
+
+        # 并发发送群消息和直接消息
+        tasks = []
+        if self.webhook_url:
+            tasks.append(self._send_webhook(alert, screenshot_path))
+        if self.app_id and self.user_open_ids:
+            tasks.append(self._send_direct_messages(alert, screenshot_path))
+
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    self.logger.error(f"飞书推送失败 (task {i}): {result}")
+
+    def _should_push_level(self, alert_level: str) -> bool:
+        """判断告警级别是否需要推送"""
+        level_priority = {"low": 1, "medium": 2, "high": 3}
+        return level_priority.get(alert_level, 3) >= level_priority.get(self.push_level, 3)
+
+    async def _send_webhook(self, alert: dict, screenshot_path: Optional[str]):
+        """发送群机器人 Webhook 消息"""
+        try:
+            card = self._build_card(alert, screenshot_path)
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.webhook_url, json=card, timeout=10) as resp:
+                    if resp.status == 200:
+                        self.logger.info("飞书群消息推送成功")
+                    else:
+                        text = await resp.text()
+                        self.logger.error(f"飞书群消息推送失败: {resp.status} {text}")
+        except Exception as e:
+            self.logger.error(f"飞书群消息推送异常: {e}")
+
+    async def _send_direct_messages(self, alert: dict, screenshot_path: Optional[str]):
+        """发送直接消息给指定用户"""
+        try:
+            token = await self._get_tenant_token()
+            if not token:
+                return
+
+            card = self._build_card(alert, screenshot_path)
+            async with aiohttp.ClientSession() as session:
+                for open_id in self.user_open_ids:
+                    await self._post_message(session, token, open_id, card)
+        except Exception as e:
+            self.logger.error(f"飞书直接消息推送异常: {e}")
+
+    async def _get_tenant_token(self) -> Optional[str]:
+        """获取 tenant_access_token（带缓存）"""
+        now = time.time()
+        if self._tenant_token and now < self._token_expire_ts:
+            return self._tenant_token
+
+        try:
+            url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+            payload = {"app_id": self.app_id, "app_secret": self.app_secret}
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, timeout=10) as resp:
+                    data = await resp.json()
+                    if data.get("code") == 0:
+                        self._tenant_token = data["tenant_access_token"]
+                        self._token_expire_ts = now + data.get("expire", 7200) - 300  # 提前 5 分钟刷新
+                        return self._tenant_token
+                    else:
+                        self.logger.error(f"获取飞书 token 失败: {data}")
+                        return None
+        except Exception as e:
+            self.logger.error(f"获取飞书 token 异常: {e}")
+            return None
+
+    async def _post_message(self, session: aiohttp.ClientSession, token: str, open_id: str, card: dict):
+        """发送消息给指定用户"""
+        try:
+            url = "https://open.feishu.cn/open-apis/im/v1/messages"
+            params = {"receive_id_type": "open_id"}
+            headers = {"Authorization": f"Bearer {token}"}
+            payload = {
+                "receive_id": open_id,
+                "msg_type": "interactive",
+                "content": card["card"],  # 卡片内容
+            }
+
+            async with session.post(url, params=params, headers=headers, json=payload, timeout=10) as resp:
+                if resp.status == 200:
+                    self.logger.info(f"飞书直接消息推送成功: {open_id}")
+                else:
+                    text = await resp.text()
+                    self.logger.error(f"飞书直接消息推送失败 ({open_id}): {resp.status} {text}")
+        except Exception as e:
+            self.logger.error(f"飞书直接消息推送异常 ({open_id}): {e}")
+
+    def _build_card(self, alert: dict, screenshot_path: Optional[str]) -> dict:
+        """构建飞书卡片消息"""
+        data = alert.get("data", {})
+        camera_id = alert.get("camera_id", 0)
+        timestamp = alert.get("timestamp", "")
+        message = alert.get("message", "检测到人员")
+        person_count = data.get("person_count", 0)
+        new_track_ids = data.get("new_track_ids", [])
+
+        # 卡片内容
+        content = f"**摄像头**: {camera_id}\n"
+        content += f"**时间**: {timestamp}\n"
+        content += f"**人数**: {person_count} 人\n"
+        content += f"**新增**: {len(new_track_ids)} 人\n"
+        content += f"**消息**: {message}"
+
+        card = {
+            "msg_type": "interactive",
+            "card": {
+                "header": {
+                    "title": {"tag": "plain_text", "content": "⚠️ 安防告警"},
+                    "template": "red",
+                },
+                "elements": [
+                    {
+                        "tag": "div",
+                        "text": {"tag": "lark_md", "content": content},
+                    }
+                ],
+            },
+        }
+
+        # TODO: 截图上传（需要调用飞书图片上传 API）
+        # if self.include_screenshot and screenshot_path:
+        #     image_key = await self._upload_image(screenshot_path)
+        #     if image_key:
+        #         card["card"]["elements"].append({
+        #             "tag": "img",
+        #             "img_key": image_key,
+        #             "alt": {"tag": "plain_text", "content": "告警截图"}
+        #         })
+
+        return card

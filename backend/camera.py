@@ -4,7 +4,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Generator, Callable
+from typing import Optional, Generator, Callable, Union
 
 import numpy as np
 
@@ -22,16 +22,20 @@ class CameraManager:
     def __init__(
         self,
         camera_id: int = 0,
+        source: Union[int, str] = 0,
         width: Optional[int] = None,
         height: Optional[int] = None,
+        device: str = "cpu",
         signal_callback: Optional[Callable[[dict], None]] = None,
         db_manager=None,
         redis_stats=None,
         screenshot_config: Optional[dict] = None,
     ):
         self.camera_id = camera_id
+        self.source = source if source is not None else camera_id  # 兼容旧代码
         self.width = width
         self.height = height
+        self.device = device
         self.signal_callback = signal_callback
         self.db_manager = db_manager
         self.redis_stats = redis_stats
@@ -106,7 +110,13 @@ class CameraManager:
             from ultralytics import YOLO
 
             self._model = YOLO(str(MODEL_PATH))
-            self._emit_log("info", "model.loaded", f"YOLO 模型已加载: {MODEL_PATH}")
+
+            # GPU 加速支持
+            if self.device != "cpu":
+                self._model.to(self.device)
+                self._emit_log("info", "model.loaded", f"YOLO 模型已加载: {MODEL_PATH} (device={self.device})")
+            else:
+                self._emit_log("info", "model.loaded", f"YOLO 模型已加载: {MODEL_PATH}")
         except Exception as e:
             self._model = None
             self._emit_log("error", "model.load_failed", f"YOLO 模型加载失败: {e}")
@@ -116,8 +126,15 @@ class CameraManager:
     # ------------------------------------------------------------------ #
 
     def _open_camera(self) -> bool:
-        # Windows 下优先使用 DirectShow 后端，避免 MSMF 读帧失败问题
-        cap = cv2.VideoCapture(self.camera_id, cv2.CAP_DSHOW)
+        source = self.source
+        is_rtsp = isinstance(source, str) and source.lower().startswith("rtsp")
+
+        if is_rtsp:
+            # RTSP 网络摄像头，不使用 DirectShow 后端
+            cap = cv2.VideoCapture(source)
+        else:
+            # 本地设备，Windows 下优先使用 DirectShow 后端，避免 MSMF 读帧失败问题
+            cap = cv2.VideoCapture(int(source), cv2.CAP_DSHOW)
 
         if not cap.isOpened():
             cap.release()

@@ -10,7 +10,7 @@ ROOT = Path(__file__).parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse
 import uvicorn
 
@@ -20,6 +20,7 @@ from backend.logging_system import structured_logger
 from backend.schemas import DetectionConfig
 from backend.database import DatabaseManager
 from backend.redis_stats import RedisStats
+from backend.notifier import FeishuNotifier
 
 # ------------------------------------------------------------------ #
 #  全局状态
@@ -33,6 +34,7 @@ config: dict = {}
 db_manager: Optional[DatabaseManager] = None
 redis_stats: Optional[RedisStats] = None
 _cleanup_task: Optional[asyncio.Task] = None
+feishu_notifier: Optional[FeishuNotifier] = None
 
 
 # ------------------------------------------------------------------ #
@@ -111,7 +113,7 @@ def _do_cleanup(save_dir: str, retention_days: int):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _event_loop, config, db_manager, redis_stats, _cleanup_task
+    global _event_loop, config, db_manager, redis_stats, _cleanup_task, feishu_notifier
     _event_loop = asyncio.get_running_loop()
 
     # ── 启动阶段 ──
@@ -145,8 +147,29 @@ async def lifespan(app: FastAPI):
             print(f"[WARN] Redis 连接失败（实时统计不可用）: {e}")
             redis_stats = None
 
-    # 4. 启动截图定时清理任务
+    # 4. 初始化飞书推送（可选）
+    feishu_cfg = config.get("notifications", {}).get("feishu", {})
+    if feishu_cfg.get("enabled"):
+        try:
+            feishu_notifier = FeishuNotifier(feishu_cfg)
+            print("飞书推送已启用")
+        except Exception as e:
+            print(f"[WARN] 飞书推送初始化失败: {e}")
+            feishu_notifier = None
+
+    # 5. 启动截图定时清理任务
     _cleanup_task = asyncio.create_task(_run_cleanup())
+
+    # 6. 初始化所有配置的摄像头
+    cameras_cfg = config.get("cameras", [])
+    if cameras_cfg:
+        print(f"初始化 {len(cameras_cfg)} 个摄像头...")
+        for cam_cfg in cameras_cfg:
+            try:
+                get_camera(cam_cfg["id"], cam_cfg)
+                print(f"  - 摄像头 {cam_cfg['id']} ({cam_cfg.get('name', 'N/A')}) 已启动")
+            except Exception as e:
+                print(f"  - 摄像头 {cam_cfg['id']} 启动失败: {e}")
 
     structured_logger.log("info", "app.startup", "服务启动完成")
 
@@ -204,6 +227,12 @@ def _dispatch_signal(message: dict):
 def _camera_signal_callback(message: dict):
     if message.get("type") == "log":
         structured_logger._buffer.append(message)
+
+    # 飞书推送（异步，不阻塞）
+    if message.get("type") == "alert" and feishu_notifier:
+        screenshot_path = message.get("data", {}).get("screenshot_path")
+        asyncio.create_task(feishu_notifier.send_alert(message, screenshot_path))
+
     _dispatch_signal(message)
 
 
@@ -211,27 +240,37 @@ def _camera_signal_callback(message: dict):
 #  摄像头工厂
 # ------------------------------------------------------------------ #
 
-def get_camera(camera_id: int = 0) -> CameraManager:
+def get_camera(camera_id: int = 0, cam_cfg: Optional[dict] = None) -> CameraManager:
     if camera_id not in cameras:
-        cam_cfg = config.get("camera", {})
+        # 从配置列表中查找摄像头配置，或使用传入的 cam_cfg
+        if cam_cfg is None:
+            cameras_list = config.get("cameras", [])
+            cam_cfg = next((c for c in cameras_list if c.get("id") == camera_id), {})
+
         alert_cfg = config.get("alert", {})
         screenshot_cfg = alert_cfg.get("screenshot", {})
+        det_cfg = config.get("detection", {})
 
         auto_resolution = cam_cfg.get("auto_resolution", True)
         width = None if auto_resolution else cam_cfg.get("width")
         height = None if auto_resolution else cam_cfg.get("height")
 
+        # GPU 设备选择
+        gpu_enabled = det_cfg.get("gpu_enabled", False)
+        device = det_cfg.get("device", "cpu") if gpu_enabled else "cpu"
+
         cameras[camera_id] = CameraManager(
             camera_id=camera_id,
+            source=cam_cfg.get("source", camera_id),
             width=width,
             height=height,
+            device=device,
             signal_callback=_camera_signal_callback,
             db_manager=db_manager,
             redis_stats=redis_stats,
             screenshot_config=screenshot_cfg,
         )
 
-        det_cfg = config.get("detection", {})
         if det_cfg.get("conf_threshold") is not None:
             cameras[camera_id].conf_threshold = float(det_cfg["conf_threshold"])
         if det_cfg.get("detect_every_n") is not None:
@@ -248,7 +287,9 @@ def get_camera(camera_id: int = 0) -> CameraManager:
             redis_stats.set_camera_online(camera_id)
 
         entry = structured_logger.log(
-            "info", "camera.created", "摄像头实例已创建", camera_id=camera_id
+            "info", "camera.created", "摄像头实例已创建",
+            camera_id=camera_id,
+            data={"name": cam_cfg.get("name", ""), "source": str(cam_cfg.get("source", camera_id))},
         )
         _dispatch_signal(entry)
     return cameras[camera_id]
@@ -479,6 +520,84 @@ async def get_stats():
         return redis_stats.get_all_stats()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取统计数据失败: {e}")
+
+
+# ------------------------------------------------------------------ #
+#  摄像头动态管理 API
+# ------------------------------------------------------------------ #
+
+@app.get("/api/cameras")
+async def list_cameras():
+    cameras_cfg = config.get("cameras", [])
+    result = []
+    for cam_cfg in cameras_cfg:
+        cam_id = cam_cfg["id"]
+        cam = cameras.get(cam_id)
+        item = {
+            "id": cam_id,
+            "name": cam_cfg.get("name", f"Camera {cam_id}"),
+            "location": cam_cfg.get("location", ""),
+            "source": str(cam_cfg.get("source", cam_id)),
+        }
+        if cam:
+            item.update(cam.get_status())
+        else:
+            item.update({"connected": False, "running": False, "model_loaded": False})
+        result.append(item)
+    return {"cameras": result, "total": len(result)}
+
+
+@app.post("/api/cameras/{camera_id}/add")
+async def add_camera(camera_id: int, body: dict):
+    if camera_id in cameras:
+        raise HTTPException(status_code=409, detail=f"摄像头 {camera_id} 已存在")
+
+    source = body.get("source")
+    if source is None:
+        raise HTTPException(status_code=422, detail="source 字段必填")
+
+    cam_cfg = {
+        "id": camera_id,
+        "source": source,
+        "name": body.get("name", f"Camera {camera_id}"),
+        "location": body.get("location", ""),
+        "auto_resolution": body.get("auto_resolution", True),
+        "width": body.get("width", 1280),
+        "height": body.get("height", 720),
+    }
+
+    try:
+        cam = get_camera(camera_id, cam_cfg)
+        entry = structured_logger.log(
+            "info", "camera.added", f"摄像头 {camera_id} 已动态添加",
+            camera_id=camera_id,
+            data={"name": cam_cfg["name"], "source": str(source)},
+        )
+        _dispatch_signal(entry)
+        return cam.get_status()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"添加摄像头失败: {e}")
+
+
+@app.post("/api/cameras/{camera_id}/remove")
+async def remove_camera(camera_id: int):
+    if camera_id not in cameras:
+        raise HTTPException(status_code=404, detail=f"摄像头 {camera_id} 不存在")
+
+    cam = cameras.pop(camera_id)
+    try:
+        cam.stop()
+        if redis_stats and redis_stats.is_enabled():
+            redis_stats.set_camera_offline(camera_id)
+    except Exception:
+        pass
+
+    entry = structured_logger.log(
+        "info", "camera.removed", f"摄像头 {camera_id} 已移除",
+        camera_id=camera_id,
+    )
+    _dispatch_signal(entry)
+    return {"success": True, "camera_id": camera_id}
 
 
 # ------------------------------------------------------------------ #

@@ -1,44 +1,70 @@
 # 智能安防监控系统配置文件
-# 配置版本: v1.0
+# 配置版本: v2.0
 
 # ============================================================
-# 摄像头配置
+# 摄像头配置（支持多摄像头）
 # ============================================================
-camera:
-  camera_id: 0                       # 摄像头设备 ID
-  auto_resolution: true              # 是否自动获取摄像头原生分辨率
-  width: 1280                        # auto_resolution=false 时生效
-  height: 720
-  backend: "dshow"                   # OpenCV 后端: dshow / msmf / auto
+cameras:
+  - id: 0
+    source: 0                            # 整数=本地设备ID，字符串=RTSP URL
+    name: "本地摄像头"
+    location: "测试环境"
+    auto_resolution: true                # 是否自动获取摄像头原生分辨率
+    width: 1280                          # auto_resolution=false 时生效
+    height: 720
+
+  # RTSP 摄像头示例（按需启用）
+  # - id: 1
+  #   source: "rtsp://admin:password@192.168.1.100:554/stream1"
+  #   name: "前门摄像头"
+  #   location: "一楼大厅"
+  #   auto_resolution: false
+  #   width: 1920
+  #   height: 1080
 
 # ============================================================
 # 检测配置
 # ============================================================
 detection:
   model_path: "models/person_best.pt"
-  conf_threshold: 0.5                # 置信度阈值 (0.0-1.0)
-  detect_every_n: 1                  # 每 N 帧检测一次（1=每帧检测）
-  device: "cpu"                      # 推理设备: cpu / cuda / cuda:0
+  conf_threshold: 0.5                    # 置信度阈值 (0.0-1.0)
+  detect_every_n: 1                      # 每 N 帧检测一次（1=每帧检测）
+
+  # GPU 加速配置
+  gpu_enabled: false                     # GPU 总开关，false 强制使用 CPU
+  device: "cpu"                          # gpu_enabled=true 时生效: cpu / cuda / cuda:0 / auto
 
 # ============================================================
 # 告警配置
 # ============================================================
 alert:
-  cooldown_sec: 5.0                  # 全局告警冷却时间（秒）
-  track_ttl_sec: 2.0                 # Track 超时时间（秒）
+  cooldown_sec: 5.0                      # 全局告警冷却时间（秒）
+  track_ttl_sec: 2.0                     # Track 超时时间（秒）
 
   # 截图配置
   screenshot:
-    enabled: true                    # 是否启用截图保存
-    quality: 75                      # JPEG 质量 (50-95)，75 可减少 40% 体积
-    save_mode: "first_only"          # 保存模式:
-                                     #   first_only: 同一 Track 只保存首次告警
-                                     #   all: 每次告警都保存
-                                     #   interval: 间隔 N 秒保存一次
-    interval_sec: 10                 # save_mode=interval 时生效
-    retention_days: 30               # 截图保留天数（自动清理）
-    crop_detection: false            # 是否只保存检测框区域（crop）
-    save_dir: "data/screenshots"     # 截图保存目录
+    enabled: true                        # 是否启用截图保存
+    quality: 75                          # JPEG 质量 (50-95)，75 可减少 40% 体积
+    save_mode: "first_only"              # 保存模式:
+                                         #   first_only: 同一 Track 只保存首次告警
+                                         #   all: 每次告警都保存
+                                         #   interval: 间隔 N 秒保存一次
+    interval_sec: 10                     # save_mode=interval 时生效
+    retention_days: 30                   # 截图保留天数（自动清理）
+    crop_detection: false                # 是否只保存检测框区域（crop）
+    save_dir: "data/screenshots"         # 截图保存目录
+
+# ============================================================
+# 通知配置
+# ============================================================
+notifications:
+  feishu:
+    enabled: false                       # 是否启用飞书推送
+    push_cooldown_sec: 60                # 推送冷却时间（秒），独立于告警冷却
+    push_level: "high"                   # 推送级别过滤: low / medium / high
+    include_screenshot: true             # 推送消息是否附带截图
+    # 敏感配置（app_id, app_secret, webhook_url, user_open_ids）
+    # 请在 config.secrets.yaml 中配置
 
 # ============================================================
 # MySQL 数据库配置
@@ -48,20 +74,20 @@ database:
   host: "localhost"
   port: 3306
   user: "root"
-  password: "Rudai2003"          # 请修改为实际密码
+  password: "Rudai2003"                  # 建议通过环境变量覆盖: YOLO_DATABASE_PASSWORD
   database: "security_monitor"
   charset: "utf8mb4"
-  pool_size: 5                       # 连接池大小
-  pool_recycle: 3600                 # 连接回收时间（秒）
+  pool_size: 5                           # 连接池大小
+  pool_recycle: 3600                     # 连接回收时间（秒）
 
 # ============================================================
 # Redis 配置（可选，用于实时统计）
 # ============================================================
 redis:
-  enabled: false                     # 是否启用 Redis 实时统计
+  enabled: false                         # 是否启用 Redis 实时统计
   host: "localhost"
   port: 6379
-  password: ""                       # 留空表示无密码
+  password: ""                           # 留空表示无密码
   db: 0
   decode_responses: true
 
@@ -69,13 +95,13 @@ redis:
 # 服务器配置
 # ============================================================
 server:
-  host: "0.0.0.0"                    # 监听地址（0.0.0.0 表示所有网卡）
+  host: "0.0.0.0"                        # 监听地址（0.0.0.0 表示所有网卡）
   port: 8000
-  log_level: "info"                  # 日志级别: debug / info / warning / error
+  log_level: "info"                      # 日志级别: debug / info / warning / error
 
 # ============================================================
 # 系统配置
 # ============================================================
 system:
-  cleanup_schedule: "03:00"          # 每日清理时间（HH:MM 格式）
-  max_log_buffer: 500                # 内存日志缓冲区大小
+  cleanup_schedule: "03:00"              # 每日清理时间（HH:MM 格式）
+  max_log_buffer: 500                    # 内存日志缓冲区大小

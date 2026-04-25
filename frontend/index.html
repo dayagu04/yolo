@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>智能安防监控</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -48,460 +49,813 @@
     header .sep { width: 1px; height: 20px; background: var(--border); }
     .ws-pill {
       display: flex; align-items: center; gap: 6px;
-      font-size: 11px; color: var(--muted);
-      background: var(--surface2); border: 1px solid var(--border);
-      padding: 3px 10px; border-radius: 20px;
-      transition: border-color .3s, color .3s;
+      font-size: 12px; color: var(--muted);
     }
-    .ws-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); transition: background .3s; }
-    .ws-pill.connected { border-color: var(--ok); color: var(--ok); }
-    .ws-pill.connected .dot { background: var(--ok); box-shadow: 0 0 5px var(--ok); }
-    .ws-pill.error { border-color: var(--danger); color: var(--danger); }
-    .ws-pill.error .dot { background: var(--danger); }
-    header .spacer { flex: 1; }
-    .hstat { font-size: 12px; color: var(--muted); }
-    .hstat b { color: var(--text); font-weight: 600; }
-    .hstat + .hstat { margin-left: 14px; }
-
-    /* ── Main ── */
-    main { display: grid; grid-template-columns: 1fr 270px; overflow: hidden; }
-
-    /* ── Video ── */
-    .video-panel {
-      position: relative; background: #000;
-      display: flex; align-items: center; justify-content: center; overflow: hidden;
+    .ws-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--muted); transition: background 0.3s;
     }
-    #stream { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .ws-dot.connected { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+    .ws-dot.error     { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
 
-    .alert-banner {
-      position: absolute; top: 14px; left: 50%;
-      transform: translateX(-50%) translateY(-70px);
-      background: linear-gradient(135deg, #c62828, var(--danger));
-      color: #fff; padding: 9px 22px; border-radius: var(--radius);
-      font-weight: 700; font-size: 14px; letter-spacing: .5px;
-      box-shadow: 0 4px 20px rgba(255,23,68,.4);
-      transition: transform .3s cubic-bezier(.34,1.56,.64,1);
-      white-space: nowrap; pointer-events: none; z-index: 10;
+    /* ── Tabs ── */
+    .tabs {
+      display: flex; align-items: center; gap: 2px;
+      margin-left: auto; height: 100%;
     }
-    .alert-banner.show { transform: translateX(-50%) translateY(0); }
-
-    .count-badge {
-      position: absolute; bottom: 14px; left: 14px;
-      background: rgba(0,0,0,.75);
-      -webkit-backdrop-filter: blur(4px);
-      backdrop-filter: blur(4px);
-      border: 1px solid var(--accent); color: var(--accent);
-      padding: 4px 12px; border-radius: 4px;
-      font-size: 12px; font-weight: 600;
+    .tab-btn {
+      padding: 0 16px; height: 100%;
+      background: none; border: none;
+      color: var(--muted); font-size: 13px;
+      cursor: pointer; border-bottom: 2px solid transparent;
+      transition: color 0.2s, border-color 0.2s;
     }
-    .count-badge.hidden { display: none; }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
 
-    /* ── Sidebar ── */
-    .sidebar {
-      background: var(--surface); border-left: 1px solid var(--border);
-      display: flex; flex-direction: column; overflow: hidden;
+    /* ── Main Content (tabs) ── */
+    .tab-content { display: none; overflow: hidden; }
+    .tab-content.active { display: flex; flex-direction: column; overflow: hidden; }
+
+    /* ── Camera Grid (Tab 1) ── */
+    .camera-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 8px;
+      padding: 8px;
+      overflow-y: auto;
+      height: 100%;
     }
-    .sb-section { padding: 14px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
-    .sb-section h3 { font-size: 10px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted); margin-bottom: 10px; }
+    .camera-cell {
+      position: relative;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      aspect-ratio: 16/9;
+      cursor: pointer;
+      transition: border-color 0.2s;
+    }
+    .camera-cell:hover { border-color: var(--accent); }
+    .camera-cell.expanded {
+      grid-column: span 2;
+      grid-row: span 2;
+    }
+    .camera-cell img {
+      width: 100%; height: 100%;
+      object-fit: cover; display: block;
+    }
+    .camera-cell .cam-overlay {
+      position: absolute; top: 0; left: 0; right: 0;
+      padding: 6px 10px;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, transparent 100%);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .cam-name { font-size: 12px; font-weight: 600; color: #fff; }
+    .cam-status-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--ok); margin-left: auto;
+    }
+    .cam-status-dot.offline { background: var(--danger); }
+    .camera-cell .cam-stats {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      padding: 4px 10px;
+      background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%);
+      display: flex; justify-content: space-between;
+      font-size: 11px; color: rgba(255,255,255,0.7);
+    }
+    .cam-alert-banner {
+      position: absolute; top: 50%; left: 0; right: 0;
+      transform: translateY(-50%);
+      background: rgba(255, 23, 68, 0.85);
+      padding: 8px 12px;
+      text-align: center; font-size: 13px; font-weight: 700;
+      color: #fff; display: none;
+      animation: flash 0.5s ease-in-out infinite alternate;
+    }
+    @keyframes flash { from { opacity: 0.7; } to { opacity: 1; } }
+    .cam-placeholder {
+      width: 100%; height: 100%; display: flex;
+      align-items: center; justify-content: center;
+      color: var(--muted); font-size: 13px;
+      background: var(--surface2);
+    }
 
-    .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+    /* ── Stats Panel (Tab 2) ── */
+    .stats-panel {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 80px 1fr;
+      gap: 8px; padding: 8px;
+      overflow-y: auto; height: 100%;
+    }
+    .stat-cards {
+      grid-column: 1 / -1;
+      display: flex; gap: 8px;
+    }
     .stat-card {
-      background: var(--surface2); border: 1px solid var(--border);
-      border-radius: var(--radius); padding: 9px; text-align: center;
+      flex: 1; background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      display: flex; flex-direction: column; gap: 4px;
     }
-    .stat-card .val { font-size: 20px; font-weight: 700; color: var(--accent); line-height: 1; }
-    .stat-card .lbl { font-size: 10px; color: var(--muted); margin-top: 3px; }
-    .stat-card--wide { grid-column: span 2; }
-    .stat-val--sm { font-size: 13px; }
-
-    .health-row { display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: var(--muted); padding: 3px 0; }
-    .badge { font-size: 10px; padding: 1px 7px; border-radius: 10px; background: var(--surface2); border: 1px solid var(--border); }
-    .badge.ok   { border-color: var(--ok);     color: var(--ok); }
-    .badge.warn { border-color: var(--warn);   color: var(--warn); }
-    .badge.err  { border-color: var(--danger); color: var(--danger); }
-
-    .control-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; font-size: 12px; }
-    .toggle { position: relative; width: 36px; height: 20px; }
-    .toggle input { opacity: 0; width: 0; height: 0; }
-    .toggle-slider { position: absolute; inset: 0; background: var(--border); border-radius: 20px; cursor: pointer; transition: background .2s; }
-    .toggle-slider::before { content: ''; position: absolute; width: 14px; height: 14px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: transform .2s; }
-    .toggle input:checked + .toggle-slider { background: var(--accent2); }
-    .toggle input:checked + .toggle-slider::before { transform: translateX(16px); }
-
-    .range-row { margin-bottom: 9px; }
-    .range-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
-    .range-label span { color: var(--text); }
-    input[type=range] { width: 100%; accent-color: var(--accent2); }
-
-    .alert-list-wrap { flex: 1; overflow-y: auto; padding: 0 16px 12px; }
-    .alert-list-wrap h3 {
-      font-size: 10px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted);
-      padding: 12px 0 8px; position: sticky; top: 0; background: var(--surface);
+    .stat-card .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-card .value { font-size: 26px; font-weight: 700; color: var(--accent); }
+    .stat-card .sub { font-size: 11px; color: var(--muted); }
+    .chart-box {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 8px;
+      min-height: 200px;
+    }
+    .chart-box .chart-title {
+      font-size: 12px; color: var(--muted);
+      margin-bottom: 4px; padding: 0 4px;
+    }
+    .chart-box .chart-inner { width: 100%; height: calc(100% - 24px); }
+    .stats-disabled {
+      grid-column: 1 / -1; grid-row: 2 / -1;
+      display: flex; align-items: center; justify-content: center;
+      color: var(--muted); font-size: 14px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
     }
 
-    .log-item { display: flex; align-items: flex-start; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 11px; }
-    .log-item .dot { width: 5px; height: 5px; border-radius: 50%; margin-top: 4px; flex-shrink: 0; }
-    .dot-alert  { background: var(--danger); box-shadow: 0 0 4px var(--danger); }
-    .dot-status { background: var(--ok); }
-    .dot-info   { background: var(--muted); }
-    .log-item .log-time { color: var(--muted); white-space: nowrap; }
-    .log-item .log-msg  { color: var(--text); line-height: 1.4; }
-    .log-empty { color: var(--muted); font-size: 11px; text-align: center; padding: 16px 0; }
+    /* ── Alert History (Tab 3) ── */
+    .alert-panel {
+      display: flex; flex-direction: column;
+      gap: 8px; padding: 8px;
+      overflow: hidden; height: 100%;
+    }
+    .filter-bar {
+      display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+      padding: 8px 12px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      flex-shrink: 0;
+    }
+    .filter-bar label { font-size: 12px; color: var(--muted); }
+    .filter-bar input, .filter-bar select {
+      background: var(--surface); border: 1px solid var(--border);
+      color: var(--text); padding: 4px 8px;
+      border-radius: var(--radius); font-size: 12px;
+    }
+    .filter-bar input:focus, .filter-bar select:focus {
+      outline: none; border-color: var(--accent);
+    }
+    .btn {
+      padding: 5px 12px; border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--surface); color: var(--text);
+      font-size: 12px; cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    .btn:hover { background: var(--surface2); border-color: var(--accent); }
+    .btn.primary { background: var(--accent); color: #000; border-color: var(--accent); }
+    .btn.primary:hover { background: #00bcd4; }
+
+    .alert-table-wrap {
+      flex: 1; overflow-y: auto;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    thead th {
+      position: sticky; top: 0; z-index: 1;
+      background: var(--surface);
+      padding: 8px 10px; text-align: left;
+      color: var(--muted); font-weight: 600;
+      border-bottom: 1px solid var(--border);
+    }
+    tbody td { padding: 6px 10px; border-bottom: 1px solid var(--border); }
+    tbody tr:hover { background: rgba(255,255,255,0.03); }
+    .level-badge {
+      display: inline-block; padding: 1px 6px;
+      border-radius: 10px; font-size: 11px; font-weight: 600;
+    }
+    .level-high { background: rgba(255,23,68,0.2); color: var(--danger); }
+    .level-medium { background: rgba(255,145,0,0.2); color: var(--warn); }
+    .empty-row {
+      text-align: center;
+      color: var(--muted);
+      padding: 20px;
+    }
+    .muted-text { color: var(--muted); }
+      width: 48px; height: 27px;
+      object-fit: cover; border-radius: 3px;
+      cursor: pointer; border: 1px solid var(--border);
+      transition: border-color 0.2s;
+    }
+    .thumb:hover { border-color: var(--accent); }
+
+    .pagination {
+      display: flex; align-items: center; gap: 8px;
+      justify-content: flex-end;
+      flex-shrink: 0;
+    }
+    .pagination span { font-size: 12px; color: var(--muted); }
 
     /* ── Log Panel ── */
-    .log-panel { background: var(--surface); border-top: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
-    .log-panel-header {
-      display: flex; align-items: center; gap: 10px;
-      padding: 6px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    #log-panel {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      overflow: hidden;
     }
-    .log-panel-header h3 { font-size: 10px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted); }
-    .log-panel-header .spacer { flex: 1; }
-    .level-btn {
-      font-size: 10px; padding: 2px 8px; border-radius: 10px;
-      border: 1px solid var(--border); background: transparent;
-      color: var(--muted); cursor: pointer; transition: all .15s;
+    .log-header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 4px 12px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
     }
-    .level-btn.active-all   { border-color: var(--accent);  color: var(--accent); }
-    .level-btn.active-info  { border-color: var(--ok);      color: var(--ok); }
-    .level-btn.active-warn  { border-color: var(--warn);    color: var(--warn); }
-    .level-btn.active-error { border-color: var(--danger);  color: var(--danger); }
-
-    .log-entries {
-      flex: 1; overflow-y: auto; padding: 4px 16px 8px;
-      font-family: 'Consolas', 'Courier New', monospace; font-size: 11px;
+    .log-header-title { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; }
+    .log-count { font-size: 11px; color: var(--muted); margin-left: auto; }
+    #log-list {
+      flex: 1; overflow-y: auto;
+      padding: 0 8px;
     }
-    .log-entry { display: flex; gap: 10px; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,.03); line-height: 1.5; }
-    .log-entry .le-ts  { color: var(--muted); white-space: nowrap; flex-shrink: 0; }
-    .log-entry .le-lvl { width: 50px; flex-shrink: 0; font-weight: 600; }
-    .le-lvl.info    { color: var(--ok); }
-    .le-lvl.warning { color: var(--warn); }
-    .le-lvl.error   { color: var(--danger); }
-    .le-lvl.debug   { color: var(--muted); }
-    .log-entry .le-evt { color: var(--accent2); flex-shrink: 0; min-width: 160px; }
-    .log-entry .le-msg { color: var(--text); }
+    .log-item {
+      display: flex; align-items: baseline; gap: 8px;
+      padding: 2px 4px; border-radius: 3px;
+      font-size: 11px; font-family: 'Consolas', monospace;
+      line-height: 1.5;
+    }
+    .log-item:hover { background: rgba(255,255,255,0.03); }
+    .log-ts { color: var(--muted); flex-shrink: 0; }
+    .log-cam { color: var(--accent2); flex-shrink: 0; }
+    .log-event { color: var(--muted); flex-shrink: 0; }
+    .log-msg { color: var(--text); }
+    .log-item.alert .log-msg { color: var(--danger); font-weight: 600; }
+    .log-item.warning .log-msg { color: var(--warn); }
+    .log-item.error .log-msg { color: var(--danger); }
 
     /* ── Footer ── */
     footer {
-      background: var(--surface); border-top: 1px solid var(--border);
-      display: flex; align-items: center; padding: 0 16px; gap: 8px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      display: flex; align-items: center;
+      padding: 0 18px; gap: 16px;
+      font-size: 11px; color: var(--muted);
     }
-    .btn {
-      padding: 4px 12px; border: 1px solid var(--border);
-      background: transparent; color: var(--muted);
-      border-radius: var(--radius); font-size: 11px;
-      cursor: pointer; transition: all .15s;
+    .footer-stat { display: flex; align-items: center; gap: 4px; }
+    .footer-stat span { color: var(--text); font-weight: 600; }
+    .footer-right { margin-left: auto; }
+
+    /* ── Lightbox ── */
+    #lightbox {
+      display: none; position: fixed;
+      inset: 0; z-index: 9999;
+      background: rgba(0,0,0,0.85);
+      align-items: center; justify-content: center;
     }
-    .btn:hover { border-color: var(--accent); color: var(--accent); }
-    .btn.danger:hover { border-color: var(--danger); color: var(--danger); }
-    footer .spacer { flex: 1; }
-    .footer-info { font-size: 10px; color: var(--muted); }
+    #lightbox.open { display: flex; }
+    #lightbox img {
+      max-width: 90vw; max-height: 90vh;
+      border-radius: var(--radius);
+      border: 2px solid var(--border);
+    }
+    #lightbox .close-btn {
+      position: absolute; top: 20px; right: 20px;
+      background: none; border: none;
+      color: #fff; font-size: 24px; cursor: pointer;
+    }
   </style>
 </head>
 <body>
 
 <header>
-  <div class="logo">SURV<span>EILLANCE</span></div>
+  <div class="logo">SAFE<span>CAM</span></div>
   <div class="sep"></div>
-  <div class="ws-pill" id="wsPill">
-    <div class="dot"></div>
-    <span id="wsLabel">连接中…</span>
+  <div class="ws-pill">
+    <div class="ws-dot" id="ws-dot"></div>
+    <span id="ws-label">连接中…</span>
   </div>
-  <div class="spacer"></div>
-  <div class="hstat">摄像头 <b id="hCamId">0</b></div>
-  <div class="hstat">今日告警 <b id="hAlertCount">0</b></div>
-  <div class="hstat">FPS <b id="hFps">—</b></div>
+  <div class="sep"></div>
+  <div class="tabs">
+    <button type="button" class="tab-btn active" onclick="switchTab('monitor')">监控视图</button>
+    <button type="button" class="tab-btn" onclick="switchTab('stats')">统计面板</button>
+    <button type="button" class="tab-btn" onclick="switchTab('alerts')">告警历史</button>
+  </div>
 </header>
 
-<main>
-  <div class="video-panel">
-    <img id="stream" src="/video_feed?camera_id=0" alt="视频流">
-    <div class="alert-banner" id="alertBanner">⚠ 检测到人员入侵！</div>
-    <div class="count-badge hidden" id="countBadge">当前 <span id="personCount">0</span> 人</div>
+<!-- Tab: 监控视图 -->
+<div class="tab-content active" id="tab-monitor">
+  <div class="camera-grid" id="camera-grid">
+    <div class="cam-placeholder">正在加载摄像头列表…</div>
   </div>
+</div>
 
-  <aside class="sidebar">
-    <div class="sb-section">
-      <h3>实时统计</h3>
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="val" id="statPerson">0</div>
-          <div class="lbl">当前人数</div>
-        </div>
-        <div class="stat-card">
-          <div class="val" id="statAlerts">0</div>
-          <div class="lbl">今日告警</div>
-        </div>
-        <div class="stat-card stat-card--wide">
-          <div class="val stat-val--sm" id="statLastAlert">—</div>
-          <div class="lbl">最后告警时间</div>
-        </div>
+<!-- Tab: 统计面板 -->
+<div class="tab-content" id="tab-stats">
+  <div class="stats-panel" id="stats-panel">
+    <div class="stat-cards">
+      <div class="stat-card">
+        <div class="label">今日告警</div>
+        <div class="value" id="stat-today">—</div>
+        <div class="sub">自 00:00 起</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">在线摄像头</div>
+        <div class="value" id="stat-cams">—</div>
+        <div class="sub">/ 已配置数量</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">当前检测人数</div>
+        <div class="value" id="stat-persons">—</div>
+        <div class="sub">所有摄像头之和</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">总告警次数</div>
+        <div class="value" id="stat-total">—</div>
+        <div class="sub">自服务启动</div>
       </div>
     </div>
-
-    <div class="sb-section">
-      <h3>系统状态</h3>
-      <div class="health-row"><span>摄像头</span><span class="badge" id="hCamera">—</span></div>
-      <div class="health-row"><span>AI 模型</span><span class="badge" id="hModel">—</span></div>
-      <div class="health-row"><span>帧延迟</span><span class="badge" id="hFrameAge">—</span></div>
-      <div class="health-row"><span>WS 客户端</span><span class="badge" id="hWsClients">—</span></div>
+    <div class="chart-box" id="chart-trend-box">
+      <div class="chart-title">今日每小时告警趋势</div>
+      <div class="chart-inner" id="chart-trend"></div>
     </div>
-
-    <div class="sb-section">
-      <h3>检测设置</h3>
-      <div class="control-row">
-        <label for="toggleDetection">YOLO 检测</label>
-        <label class="toggle">
-          <input type="checkbox" id="toggleDetection" checked onchange="setDetection(this.checked)" aria-label="启用YOLO检测">
-          <span class="toggle-slider"></span>
-        </label>
-      </div>
-      <div class="range-row">
-        <label class="range-label" for="confSlider">置信度阈值 <span id="confVal">0.50</span></label>
-        <input type="range" id="confSlider" min="10" max="95" value="50"
-               oninput="updateConf(this.value)" onchange="applyConf(this.value)"
-               aria-label="置信度阈值">
-      </div>
+    <div class="chart-box" id="chart-pie-box">
+      <div class="chart-title">各摄像头告警分布</div>
+      <div class="chart-inner" id="chart-pie"></div>
     </div>
-
-    <div class="alert-list-wrap">
-      <h3>告警记录</h3>
-      <div id="alertList"><div class="log-empty">暂无告警</div></div>
-    </div>
-  </aside>
-</main>
-
-<div class="log-panel">
-  <div class="log-panel-header">
-    <h3>系统日志</h3>
-    <button type="button" class="level-btn active-all" onclick="setFilter('all', this)">全部</button>
-    <button type="button" class="level-btn" onclick="setFilter('info', this)">INFO</button>
-    <button type="button" class="level-btn" onclick="setFilter('warning', this)">WARN</button>
-    <button type="button" class="level-btn" onclick="setFilter('error', this)">ERROR</button>
-    <div class="spacer"></div>
-    <button type="button" class="btn" onclick="loadHistoryLogs()">加载历史</button>
-    <button type="button" class="btn danger" onclick="clearLogPanel()">清空</button>
   </div>
-  <div class="log-entries" id="logEntries"></div>
+</div>
+
+<!-- Tab: 告警历史 -->
+<div class="tab-content" id="tab-alerts">
+  <div class="alert-panel">
+    <div class="filter-bar">
+      <label for="f-start">开始时间</label>
+      <input type="datetime-local" id="f-start" aria-label="开始时间">
+      <label for="f-end">结束时间</label>
+      <input type="datetime-local" id="f-end" aria-label="结束时间">
+      <label for="f-camera">摄像头</label>
+      <select id="f-camera" aria-label="选择摄像头">
+        <option value="">全部</option>
+      </select>
+      <label for="f-level">级别</label>
+      <select id="f-level" aria-label="选择告警级别">
+        <option value="">全部</option>
+        <option value="high">高</option>
+        <option value="medium">中</option>
+        <option value="low">低</option>
+      </select>
+      <button type="button" class="btn primary" onclick="loadAlerts(1)">查询</button>
+      <button type="button" class="btn" onclick="exportCSV()">导出 CSV</button>
+    </div>
+    <div class="alert-table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>时间</th>
+            <th>摄像头</th>
+            <th>人数</th>
+            <th>消息</th>
+            <th>级别</th>
+            <th>截图</th>
+          </tr>
+        </thead>
+        <tbody id="alert-tbody">
+          <tr><td colspan="7" class="empty-row">点击查询加载数据</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="pagination">
+      <span id="page-info">-</span>
+      <button type="button" class="btn" id="btn-prev" onclick="changePage(-1)">上一页</button>
+      <button type="button" class="btn" id="btn-next" onclick="changePage(1)">下一页</button>
+    </div>
+  </div>
+</div>
+
+<!-- Log Panel -->
+<div id="log-panel">
+  <div class="log-header">
+    <span class="log-header-title">系统日志</span>
+    <span class="log-count" id="log-count">0 条</span>
+  </div>
+  <div id="log-list"></div>
 </div>
 
 <footer>
-  <button type="button" class="btn" onclick="reloadStream()">刷新画面</button>
-  <button type="button" class="btn danger" onclick="clearAlerts()">清空告警</button>
-  <div class="spacer"></div>
-  <div class="footer-info" id="footerInfo">YOLOv8n · mAP50=0.802 · MJPEG</div>
+  <div class="footer-stat">摄像头 <span id="ft-cams">0</span></div>
+  <div class="footer-stat">WS客户端 <span id="ft-ws">0</span></div>
+  <div class="footer-stat">运行时长 <span id="ft-uptime">—</span></div>
+  <div class="footer-stat footer-right">DB <span id="ft-db">—</span></div>
+  <div class="footer-stat">Redis <span id="ft-redis">—</span></div>
+  <div class="footer-stat">Model <span id="ft-model">—</span></div>
 </footer>
 
+<!-- Lightbox -->
+<div id="lightbox" onclick="closeLightbox()">
+  <button type="button" class="close-btn" onclick="closeLightbox()">✕</button>
+  <img id="lightbox-img" src="" alt="告警截图">
+</div>
+
 <script>
-const CAMERA_ID = 0;
-let alertCount = 0, alertTimer = null, logFilter = 'all';
+// ── State ──
+let ws = null;
+let wsRetry = 0;
+let cameras = [];
+let alertPage = 1;
+const ALERT_PAGE_SIZE = 20;
+let chartTrend = null, chartPie = null;
+let statsInterval = null;
+let footerInterval = null;
+let alertData = [];
 
-// ── WebSocket ─────────────────────────────────────────────────────────
-const wsPill  = document.getElementById('wsPill');
-const wsLabel = document.getElementById('wsLabel');
-let ws, wsRetryDelay = 2000, heartbeatTimer = null;
+// ── Tab ──
+function switchTab(name) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  event.target.classList.add('active');
 
+  if (name === 'stats') {
+    initCharts();
+    loadStats();
+    if (!statsInterval) statsInterval = setInterval(loadStats, 5000);
+  } else {
+    if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
+  }
+  if (name === 'alerts') {
+    loadAlerts(1);
+  }
+}
+
+// ── WebSocket ──
 function connectWS() {
-  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws/alert`);
 
   ws.onopen = () => {
-    wsPill.className = 'ws-pill connected';
-    wsLabel.textContent = '已连接';
-    wsRetryDelay = 2000;
-    heartbeatTimer = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) ws.send('ping');
-    }, 20000);
+    wsRetry = 0;
+    setWsDot('connected', '已连接');
+    setInterval(() => ws.readyState === 1 && ws.send('ping'), 15000);
   };
 
-  ws.onmessage = (e) => {
-    let data;
-    try { data = JSON.parse(e.data); } catch { return; }
-    if (data.type === 'pong')   return;
-    if (data.type === 'alert')  handleAlert(data);
-    if (data.type === 'status') handleStatus(data);
-    if (data.type === 'log')    appendLogEntry(data);
-  };
-
-  ws.onerror = () => {
-    wsPill.className = 'ws-pill error';
-    wsLabel.textContent = '连接错误';
-  };
+  ws.onmessage = e => handleMessage(JSON.parse(e.data));
 
   ws.onclose = () => {
-    wsPill.className = 'ws-pill';
-    wsLabel.textContent = `重连中 (${wsRetryDelay / 1000}s)…`;
-    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
-    setTimeout(connectWS, wsRetryDelay);
-    wsRetryDelay = Math.min(wsRetryDelay * 2, 30000);
+    setWsDot('error', '已断开');
+    const delay = Math.min(30000, 1000 * 2 ** wsRetry++);
+    setTimeout(connectWS, delay);
   };
-}
-connectWS();
 
-// ── 告警处理 ──────────────────────────────────────────────────────────
-function handleAlert(data) {
-  alertCount++;
-  document.getElementById('hAlertCount').textContent = alertCount;
-  document.getElementById('statAlerts').textContent  = alertCount;
-
-  const count  = data.data?.person_count ?? 0;
-  const newIds = data.data?.new_track_ids ?? [];
-  document.getElementById('statPerson').textContent  = count;
-  document.getElementById('personCount').textContent = count;
-  document.getElementById('countBadge').classList.remove('hidden');
-
-  const ts = fmtTime(data.timestamp);
-  document.getElementById('statLastAlert').textContent = ts;
-
-  const banner = document.getElementById('alertBanner');
-  banner.textContent = `⚠ 检测到 ${newIds.length} 名新人员（共 ${count} 人）`;
-  banner.classList.add('show');
-  clearTimeout(alertTimer);
-  alertTimer = setTimeout(() => {
-    banner.classList.remove('show');
-    document.getElementById('countBadge').classList.add('hidden');
-  }, 5000);
-
-  addAlertItem(ts, data.message, newIds, 'alert');
+  ws.onerror = () => setWsDot('error', '错误');
 }
 
-// ── 状态事件 ──────────────────────────────────────────────────────────
-function handleStatus(data) {
-  const d = data.data || {};
-  if ('camera_connected' in d)
-    setBadge('hCamera', d.camera_connected ? '在线' : '离线', d.camera_connected ? 'ok' : 'err');
-  if ('model_loaded' in d)
-    setBadge('hModel', d.model_loaded ? '已加载' : '未加载', d.model_loaded ? 'ok' : 'err');
-  addAlertItem(fmtTime(data.timestamp), data.message, [], 'status');
+function setWsDot(cls, label) {
+  const dot = document.getElementById('ws-dot');
+  dot.className = 'ws-dot ' + cls;
+  document.getElementById('ws-label').textContent = label;
 }
 
-function addAlertItem(time, msg, trackIds, kind) {
-  const list  = document.getElementById('alertList');
-  const empty = list.querySelector('.log-empty');
-  if (empty) empty.remove();
-  const idStr = trackIds.length ? ` <span style="color:var(--muted)">ID:${trackIds.join(',')}</span>` : '';
-  const item  = document.createElement('div');
-  item.className = 'log-item';
-  item.innerHTML = `
-    <div class="dot dot-${kind}"></div>
-    <div>
-      <div class="log-time">${time}</div>
-      <div class="log-msg">${msg}${idStr}</div>
-    </div>`;
-  list.prepend(item);
-  while (list.children.length > 50) list.lastChild.remove();
-}
+function handleMessage(msg) {
+  addLog(msg);
 
-// ── 日志面板 ──────────────────────────────────────────────────────────
-function appendLogEntry(entry) {
-  const container = document.getElementById('logEntries');
-  const el = document.createElement('div');
-  el.className = 'log-entry';
-  el.dataset.level = entry.level;
-  if (logFilter !== 'all' && entry.level !== logFilter) el.style.display = 'none';
-  el.innerHTML = `
-    <span class="le-ts">${fmtTime(entry.timestamp)}</span>
-    <span class="le-lvl ${entry.level}">${entry.level.toUpperCase()}</span>
-    <span class="le-evt">${entry.event || ''}</span>
-    <span class="le-msg">${entry.message}</span>`;
-  container.prepend(el);
-  while (container.children.length > 200) container.lastChild.remove();
-}
-
-function setFilter(level, btn) {
-  logFilter = level;
-  document.querySelectorAll('.level-btn').forEach(b => b.className = 'level-btn');
-  btn.className = `level-btn active-${level}`;
-  document.querySelectorAll('#logEntries .log-entry').forEach(el => {
-    el.style.display = (level === 'all' || el.dataset.level === level) ? '' : 'none';
-  });
-}
-
-async function loadHistoryLogs() {
-  try {
-    const res  = await fetch('/api/logs?limit=200');
-    const json = await res.json();
-    document.getElementById('logEntries').innerHTML = '';
-    [...json.logs].reverse().forEach(e => appendLogEntry(e));
-  } catch (err) { console.error('加载历史日志失败', err); }
-}
-
-function clearLogPanel() { document.getElementById('logEntries').innerHTML = ''; }
-
-// ── Health 轮询 ───────────────────────────────────────────────────────
-async function pollHealth() {
-  try {
-    const h   = await fetch('/health').then(r => r.json());
-    const cam = h.cameras?.[0];
-    if (cam) {
-      setBadge('hCamera',   cam.connected    ? '在线'   : '离线',   cam.connected    ? 'ok' : 'err');
-      setBadge('hModel',    cam.model_loaded ? '已加载' : '未加载', cam.model_loaded ? 'ok' : 'err');
-      const age = cam.last_frame_age_ms;
-      setBadge('hFrameAge', age != null ? `${age}ms` : '—', age < 200 ? 'ok' : 'warn');
-      document.getElementById('hFps').textContent = cam.fps ? cam.fps.toFixed(1) : '—';
-
-      // 实时人数来自 active_tracks（不依赖告警事件）
-      const tracks = cam.active_tracks ?? 0;
-      document.getElementById('statPerson').textContent  = tracks;
-      document.getElementById('personCount').textContent = tracks;
-      if (tracks > 0) {
-        document.getElementById('countBadge').classList.remove('hidden');
-      } else {
-        document.getElementById('countBadge').classList.add('hidden');
-      }
+  if (msg.type === 'alert') {
+    const camId = msg.camera_id;
+    flashAlertBanner(camId, msg.message);
+    if (document.getElementById('tab-alerts').classList.contains('active')) {
+      loadAlerts(alertPage);
     }
-    setBadge('hWsClients', h.ws_clients ?? '—', 'ok');
-    document.getElementById('footerInfo').textContent =
-      `YOLOv8n · mAP50=0.802 · 运行 ${fmtUptime(h.uptime_sec)}`;
-  } catch {
-    setBadge('hCamera', '离线', 'err');
+  }
+
+  if (msg.type === 'status') {
+    const camId = msg.camera_id;
+    updateCamStatus(camId, msg);
   }
 }
-setInterval(pollHealth, 2000);
-pollHealth();
 
-// ── 控制 ──────────────────────────────────────────────────────────────
-function setDetection(enabled) {
-  fetch(`/api/camera/${CAMERA_ID}/config`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled }),
-  });
-}
-function updateConf(val) { document.getElementById('confVal').textContent = (val / 100).toFixed(2); }
-function applyConf(val) {
-  fetch(`/api/camera/${CAMERA_ID}/config`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ conf: val / 100 }),
-  });
-}
-function reloadStream() {
-  document.getElementById('stream').src = `/video_feed?camera_id=${CAMERA_ID}&t=${Date.now()}`;
-}
-function clearAlerts() {
-  document.getElementById('alertList').innerHTML = '<div class="log-empty">暂无告警</div>';
-  alertCount = 0;
-  document.getElementById('hAlertCount').textContent = 0;
-  document.getElementById('statAlerts').textContent  = 0;
+// ── Camera Grid ──
+async function loadCameras() {
+  try {
+    const res = await fetch('/api/cameras');
+    const data = await res.json();
+    cameras = data.cameras || [];
+    renderCameraGrid();
+    updateFooterCams();
+    populateCameraFilter();
+  } catch (e) {
+    console.error('loadCameras:', e);
+  }
 }
 
-// ── 工具 ──────────────────────────────────────────────────────────────
-function fmtTime(ts) {
-  if (!ts) return '—';
-  try { return new Date(ts).toLocaleTimeString('zh-CN'); } catch { return ts; }
+function renderCameraGrid() {
+  const grid = document.getElementById('camera-grid');
+  if (!cameras.length) {
+    grid.innerHTML = '<div class="cam-placeholder">未配置摄像头</div>';
+    return;
+  }
+
+  grid.innerHTML = '';
+  cameras.forEach(cam => {
+    const cell = document.createElement('div');
+    cell.className = 'camera-cell';
+    cell.id = `cam-cell-${cam.id}`;
+    cell.ondblclick = () => cell.classList.toggle('expanded');
+
+    cell.innerHTML = `
+      <img src="/video_feed?camera_id=${cam.id}" alt="cam${cam.id}"
+           onerror="this.style.display='none'; this.nextElementSibling && (this.nextElementSibling.style.display='flex')">
+      <div class="cam-overlay">
+        <span class="cam-name">${cam.name || 'CAM ' + cam.id}</span>
+        <span style="font-size:11px;color:var(--muted);margin-left:4px">${cam.location || ''}</span>
+        <span class="cam-status-dot ${cam.connected ? '' : 'offline'}" id="cam-dot-${cam.id}"></span>
+      </div>
+      <div class="cam-stats">
+        <span id="cam-fps-${cam.id}">${(cam.fps || 0).toFixed(1)} fps</span>
+        <span id="cam-persons-${cam.id}">👤 ${cam.active_tracks || 0}</span>
+      </div>
+      <div class="cam-alert-banner" id="cam-alert-${cam.id}">⚠ 检测到人员入侵</div>
+    `;
+    grid.appendChild(cell);
+  });
 }
+
+function flashAlertBanner(camId, msg) {
+  const banner = document.getElementById(`cam-alert-${camId}`);
+  if (!banner) return;
+  banner.textContent = '⚠ ' + (msg || '检测到人员');
+  banner.style.display = 'block';
+  setTimeout(() => { banner.style.display = 'none'; }, 4000);
+}
+
+function updateCamStatus(camId, msg) {
+  const dot = document.getElementById(`cam-dot-${camId}`);
+  if (dot) {
+    const connected = msg.data?.camera_connected ?? true;
+    dot.className = 'cam-status-dot ' + (connected ? '' : 'offline');
+  }
+}
+
+function updateFooterCams() {
+  const online = cameras.filter(c => c.connected).length;
+  document.getElementById('ft-cams').textContent = `${online}/${cameras.length}`;
+  document.getElementById('stat-cams').textContent = `${online}`;
+}
+
+function populateCameraFilter() {
+  const sel = document.getElementById('f-camera');
+  sel.innerHTML = '<option value="">全部</option>';
+  cameras.forEach(cam => {
+    const opt = document.createElement('option');
+    opt.value = cam.id;
+    opt.textContent = `${cam.name || 'CAM ' + cam.id} (${cam.id})`;
+    sel.appendChild(opt);
+  });
+}
+
+// ── Stats Panel ──
+function initCharts() {
+  if (!chartTrend) {
+    chartTrend = echarts.init(document.getElementById('chart-trend'), 'dark');
+  }
+  if (!chartPie) {
+    chartPie = echarts.init(document.getElementById('chart-pie'), 'dark');
+  }
+}
+
+async function loadStats() {
+  try {
+    const res = await fetch('/api/stats');
+    if (!res.ok) {
+      showStatsDisabled();
+      return;
+    }
+    const data = await res.json();
+    if (data.error) { showStatsDisabled(); return; }
+
+    // Cards
+    document.getElementById('stat-today').textContent = data.today_alerts ?? '—';
+    document.getElementById('stat-persons').textContent = data.current_persons ?? '—';
+
+    // Trend chart
+    const hourly = data.hourly_alerts || {};
+    const hours = Array.from({length: 24}, (_, i) => `${i.toString().padStart(2,'0')}:00`);
+    const counts = hours.map((_, i) => hourly[i] || 0);
+
+    chartTrend.setOption({
+      backgroundColor: 'transparent',
+      tooltip: { trigger: 'axis' },
+      xAxis: { type: 'category', data: hours, axisLabel: { fontSize: 10, color: '#55556a' } },
+      yAxis: { type: 'value', axisLabel: { color: '#55556a' }, splitLine: { lineStyle: { color: '#252535' } } },
+      series: [{
+        name: '告警', type: 'line', data: counts,
+        smooth: true, areaStyle: { opacity: 0.2 },
+        itemStyle: { color: '#00e5ff' }, lineStyle: { color: '#00e5ff' },
+      }],
+      grid: { left: 40, right: 10, top: 10, bottom: 30 },
+    });
+
+    // Pie chart
+    const camAlerts = data.camera_alerts || {};
+    const pieData = Object.entries(camAlerts).map(([k, v]) => ({
+      name: 'CAM ' + k, value: v
+    }));
+
+    chartPie.setOption({
+      backgroundColor: 'transparent',
+      tooltip: { trigger: 'item' },
+      legend: { bottom: 0, textStyle: { color: '#55556a', fontSize: 10 } },
+      series: [{
+        name: '告警分布', type: 'pie',
+        radius: ['40%', '70%'],
+        data: pieData.length ? pieData : [{ name: '无数据', value: 1 }],
+        label: { color: '#e2e2f0', fontSize: 11 },
+        emphasis: { itemStyle: { shadowBlur: 10 } },
+      }],
+    });
+
+  } catch (e) {
+    showStatsDisabled();
+  }
+}
+
+function showStatsDisabled() {
+  const panel = document.getElementById('stats-panel');
+  const boxes = panel.querySelectorAll('.chart-box');
+  boxes.forEach(b => {
+    b.innerHTML = '<div class="stats-disabled">Redis 统计未启用</div>';
+  });
+}
+
+// ── Alert History ──
+async function loadAlerts(page) {
+  alertPage = page;
+  const start = document.getElementById('f-start').value;
+  const end = document.getElementById('f-end').value;
+  const camId = document.getElementById('f-camera').value;
+  const level = document.getElementById('f-level').value;
+
+  const params = new URLSearchParams({
+    limit: ALERT_PAGE_SIZE,
+    offset: (page - 1) * ALERT_PAGE_SIZE,
+    order: 'desc',
+  });
+  if (start) params.set('start_time', start.replace('T', ' '));
+  if (end)   params.set('end_time',   end.replace('T', ' '));
+  if (camId) params.set('camera_id', camId);
+  if (level) params.set('level', level);
+
+  try {
+    const res = await fetch('/api/alerts?' + params);
+    if (!res.ok) {
+      const err = await res.json();
+      renderAlertTable([], 0, 0);
+      return;
+    }
+    const data = await res.json();
+    alertData = data.alerts || [];
+    renderAlertTable(alertData, data.total || 0, page);
+  } catch (e) {
+    renderAlertTable([], 0, 0);
+  }
+}
+
+function renderAlertTable(rows, total, page) {
+  const tbody = document.getElementById('alert-tbody');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-row">暂无数据</td></tr>';
+  } else {
+    tbody.innerHTML = rows.map(r => {
+      const levelBadge = `<span class="level-badge level-${r.level}">${{high:'高',medium:'中',low:'低'}[r.level] || r.level}</span>`;
+      const thumb = r.screenshot_path
+        ? `<img class="thumb" src="/api/alerts/${r.id}/screenshot" onclick="openLightbox('/api/alerts/${r.id}/screenshot')" loading="lazy">`
+        : '<span class="muted-text">—</span>';
+      return `<tr>
+        <td>${r.id}</td>
+        <td>${r.created_at || r.timestamp || ''}</td>
+        <td>${r.camera_id}</td>
+        <td>${r.person_count}</td>
+        <td>${r.message || ''}</td>
+        <td>${levelBadge}</td>
+        <td>${thumb}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  const totalPages = Math.max(1, Math.ceil(total / ALERT_PAGE_SIZE));
+  document.getElementById('page-info').textContent = `第 ${page} / ${totalPages} 页，共 ${total} 条`;
+  document.getElementById('btn-prev').disabled = page <= 1;
+  document.getElementById('btn-next').disabled = page >= totalPages;
+}
+
+function changePage(delta) {
+  loadAlerts(alertPage + delta);
+}
+
+function exportCSV() {
+  if (!alertData.length) { alert('请先查询数据'); return; }
+  const headers = ['ID','时间','摄像头','人数','消息','级别'];
+  const rows = alertData.map(r => [
+    r.id, r.created_at || r.timestamp, r.camera_id,
+    r.person_count, `"${(r.message||'').replace(/"/g,'""')}"`, r.level
+  ]);
+  const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `alerts_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click(); URL.revokeObjectURL(url);
+}
+
+// ── Lightbox ──
+function openLightbox(src) {
+  document.getElementById('lightbox-img').src = src;
+  document.getElementById('lightbox').classList.add('open');
+}
+function closeLightbox() {
+  document.getElementById('lightbox').classList.remove('open');
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
+
+// ── Log ──
+const MAX_LOGS = 200;
+let logCount = 0;
+
+function addLog(msg) {
+  const list = document.getElementById('log-list');
+  const item = document.createElement('div');
+
+  const type = msg.type || 'log';
+  const level = msg.level || 'info';
+  const ts = (msg.timestamp || '').slice(11, 19);
+  const camPart = msg.camera_id !== undefined ? `[CAM${msg.camera_id}]` : '';
+  const event = msg.event || type;
+  const text = msg.message || '';
+
+  item.className = `log-item ${type === 'alert' ? 'alert' : level}`;
+  item.innerHTML = `<span class="log-ts">${ts}</span><span class="log-cam">${camPart}</span><span class="log-event">${event}</span><span class="log-msg">${text}</span>`;
+
+  list.insertBefore(item, list.firstChild);
+  logCount++;
+
+  while (list.children.length > MAX_LOGS) list.removeChild(list.lastChild);
+  document.getElementById('log-count').textContent = `${logCount} 条`;
+}
+
+// ── Health / Footer ──
+async function loadHealth() {
+  try {
+    const res = await fetch('/health');
+    const data = await res.json();
+    document.getElementById('ft-ws').textContent = data.ws_clients ?? '—';
+    document.getElementById('ft-uptime').textContent = fmtUptime(data.uptime_sec);
+    document.getElementById('ft-db').textContent = data.subsystems?.database ?? '—';
+    document.getElementById('ft-redis').textContent = data.subsystems?.redis ?? '—';
+    document.getElementById('ft-model').textContent = data.subsystems?.model ?? '—';
+
+    // Update stat cards
+    const totalAlerts = (data.cameras || []).reduce((s, c) => s + (c.alert_total || 0), 0);
+    document.getElementById('stat-total').textContent = totalAlerts;
+    const online = (data.cameras || []).filter(c => c.connected).length;
+    const total = data.camera_count || 0;
+    document.getElementById('stat-cams').textContent = `${online}`;
+    document.getElementById('ft-cams').textContent = `${online}/${total}`;
+
+    // Update per-camera fps/persons in grid
+    (data.cameras || []).forEach(cam => {
+      const fps = document.getElementById(`cam-fps-${cam.camera_id}`);
+      if (fps) fps.textContent = `${(cam.fps || 0).toFixed(1)} fps`;
+      const persons = document.getElementById(`cam-persons-${cam.camera_id}`);
+      if (persons) persons.textContent = `👤 ${cam.active_tracks || 0}`;
+      const dot = document.getElementById(`cam-dot-${cam.camera_id}`);
+      if (dot) dot.className = 'cam-status-dot ' + (cam.connected ? '' : 'offline');
+    });
+
+  } catch (e) { /* ignore */ }
+}
+
 function fmtUptime(sec) {
-  if (!sec && sec !== 0) return '—';
-  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
-  if (h > 0) return `${h}h${m}m`;
-  if (m > 0) return `${m}m${s}s`;
-  return `${s}s`;
+  if (!sec) return '—';
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return `${h}h ${m}m ${s}s`;
 }
-function setBadge(id, text, cls) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.textContent = text;
-  el.className = `badge ${cls || ''}`;
-}
+
+// ── Init ──
+window.addEventListener('DOMContentLoaded', async () => {
+  connectWS();
+  await loadCameras();
+  await loadHealth();
+  footerInterval = setInterval(loadHealth, 5000);
+
+  // Fetch recent logs
+  try {
+    const res = await fetch('/api/logs?limit=50');
+    const data = await res.json();
+    (data.logs || []).reverse().forEach(log => addLog(log));
+  } catch (e) { /* ignore */ }
+});
 </script>
 </body>
 </html>

@@ -1,8 +1,9 @@
 """
 配置管理模块
-负责加载、校验 config.yaml，支持环境变量覆盖
+负责加载、校验 config.yaml + config.secrets.yaml，支持环境变量覆盖
 """
 import os
+import copy
 import yaml
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -12,6 +13,17 @@ import logging
 class ConfigError(Exception):
     """配置错误异常"""
     pass
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """深度合并两个字典，override 优先级更高"""
+    result = copy.deepcopy(base)
+    for key, val in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(val, dict):
+            result[key] = _deep_merge(result[key], val)
+        else:
+            result[key] = copy.deepcopy(val)
+    return result
 
 
 class ConfigManager:
@@ -32,16 +44,18 @@ class ConfigManager:
         "alert.cooldown_sec": (0.5, 60.0),
         "alert.screenshot.quality": (50, 95),
         "alert.screenshot.retention_days": (1, 365),
+        "notifications.feishu.push_cooldown_sec": (10, 3600),
     }
 
     def __init__(self, config_path: Path):
         self.config_path = config_path
+        self.secrets_path = config_path.parent / "config.secrets.yaml"
         self.logger = logging.getLogger(__name__)
         self._config: Dict[str, Any] = {}
 
     def load(self) -> Dict[str, Any]:
         """加载并校验配置"""
-        # 1. 加载 YAML
+        # 1. 加载主配置 YAML
         if not self.config_path.exists():
             raise ConfigError(f"配置文件不存在: {self.config_path}")
 
@@ -51,14 +65,25 @@ class ConfigManager:
         if not isinstance(self._config, dict):
             raise ConfigError("配置文件格式错误：根节点必须是字典")
 
-        # 2. 环境变量覆盖
+        # 2. 合并 config.secrets.yaml（若存在）
+        if self.secrets_path.exists():
+            with open(self.secrets_path, "r", encoding="utf-8") as f:
+                secrets = yaml.safe_load(f) or {}
+            if isinstance(secrets, dict):
+                self._config = _deep_merge(self._config, secrets)
+                self.logger.info("已合并敏感配置 config.secrets.yaml")
+
+        # 3. 环境变量覆盖
         self._apply_env_overrides()
 
-        # 3. 必填项校验
+        # 4. 必填项校验
         self._validate_required()
 
-        # 4. 范围校验
+        # 5. 范围校验
         self._validate_ranges()
+
+        # 6. 摄像头列表校验
+        self._validate_cameras()
 
         self.logger.info(f"配置加载成功: {len(self._config)} 个配置项")
         return self._config
@@ -144,6 +169,53 @@ class ConfigManager:
 
         if errors:
             raise ConfigError("配置校验失败:\n  - " + "\n  - ".join(errors))
+
+    def _validate_cameras(self):
+        """校验摄像头列表配置"""
+        cameras = self._config.get("cameras", [])
+
+        # 兼容旧版单摄像头配置（camera 字段）
+        if not cameras and "camera" in self._config:
+            old = self._config["camera"]
+            cameras = [{
+                "id": old.get("camera_id", 0),
+                "source": old.get("camera_id", 0),
+                "name": "默认摄像头",
+                "location": "",
+                "auto_resolution": old.get("auto_resolution", True),
+                "width": old.get("width", 1280),
+                "height": old.get("height", 720),
+            }]
+            self._config["cameras"] = cameras
+            self.logger.warning("检测到旧版 camera 配置，已自动转换为 cameras 列表格式")
+
+        if not cameras:
+            self.logger.warning("未配置任何摄像头，系统启动后将无视频源")
+            return
+
+        errors = []
+        seen_ids: set = set()
+        for i, cam in enumerate(cameras):
+            if not isinstance(cam, dict):
+                errors.append(f"cameras[{i}]: 必须是字典格式")
+                continue
+
+            cam_id = cam.get("id")
+            if cam_id is None:
+                errors.append(f"cameras[{i}]: 缺少 id 字段")
+            elif not isinstance(cam_id, int):
+                errors.append(f"cameras[{i}]: id 必须是整数")
+            elif cam_id in seen_ids:
+                errors.append(f"cameras[{i}]: id={cam_id} 重复")
+            else:
+                seen_ids.add(cam_id)
+
+            source = cam.get("source")
+            if source is None:
+                errors.append(f"cameras[{i}]: 缺少 source 字段")
+
+        if errors:
+            raise ConfigError("摄像头配置校验失败:\n  - " + "\n  - ".join(errors))
 
 
 def load_and_validate_config(config_path: Path) -> Dict[str, Any]:
