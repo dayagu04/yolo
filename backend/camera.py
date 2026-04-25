@@ -366,17 +366,19 @@ class CameraManager:
                 self.db_manager.create_alert(
                     camera_id=self.camera_id,
                     person_count=person_count,
+                    new_track_ids=pending,
                     screenshot_path=screenshot_path,
+                    message=f"检测到 {len(pending)} 名新出现人员",
+                    level="high",
                 )
             except Exception as e:
                 self._emit_log("error", "db.insert_failed", f"告警记录写入失败: {e}")
 
         # 更新 Redis 统计
-        if self.redis_stats:
+        if self.redis_stats and self.redis_stats.is_enabled():
             try:
-                self.redis_stats.incr_alert_count(self.camera_id)
-                self.redis_stats.update_camera_persons(self.camera_id, person_count)
-                self.redis_stats.record_hourly_alert(self.camera_id)
+                self.redis_stats.incr_today_alerts(self.camera_id)
+                self.redis_stats.update_current_persons(self.camera_id, person_count)
             except Exception as e:
                 self._emit_log("error", "redis.update_failed", f"Redis 统计更新失败: {e}")
 
