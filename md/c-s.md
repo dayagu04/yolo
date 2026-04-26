@@ -1,12 +1,13 @@
 智能视频监控 MVP 阶段：前后端详细设计文档
 
 ## 版本说明
-- **文档版本：** v1.5
+- **文档版本：** v1.6
 - **最后更新：** 2026-04-26
 - **实现状态：** 本文档为系统设计的 Source of Truth，代码实现需与此文档保持一致
 - **v1.3 更新：** 新增 MySQL 告警存储、截图保存、Redis 实时统计、告警历史查询 API
 - **v1.4 更新（P0 稳定性）：** FastAPI lifespan 生命周期、健康检查细化、配置校验、截图定时清理、异常处理统一化
 - **v1.5 更新（多摄像头/飞书/稳定性）：** 新增动态摄像头管理 API、飞书线程安全调度、`CONFIG_FILE` 启动配置切换、统计口径对齐
+- **v1.6 更新（模块拆分/接口修正）：** `CameraManager` 拆分为 `PersonTracker` + `ScreenshotManager` 两个独立子模块；同步截图路径命名规则、`get_status` 新增 `resolution` 字段、`/health` 返回补充 `subsystems` 与 `timestamp`、配置范围校验新增飞书冷却项、接口编号去重、前端日志上限与心跳间隔对齐代码
 
 ---
 
@@ -44,6 +45,7 @@
   - `alert.cooldown_sec`: 0.5 ~ 60.0
   - `alert.screenshot.quality`: 50 ~ 95
   - `alert.screenshot.retention_days`: 1 ~ 365
+  - `notifications.feishu.push_cooldown_sec`: 10 ~ 3600
 - **环境变量覆盖规则：** `YOLO_{SECTION}_{KEY}` 格式（全大写），例如：
   - `YOLO_DATABASE_PASSWORD=xxx` 覆盖 `database.password`
   - `YOLO_REDIS_ENABLED=true` 覆盖 `redis.enabled`
@@ -108,7 +110,7 @@
   - JPEG 质量可配置（默认 75，减少 40% 体积）
   - 支持三种保存模式：`first_only`（同一 Track 只保存首次）、`all`（每次都保存）、`interval`（间隔 N 秒保存）
   - 定期清理：保留最近 N 天（默认 30 天）
-  - 路径规范：`data/screenshots/{date}/cam{id}_alert_{alert_id}.jpg`
+  - 路径规范：`{save_dir}/{date}/cam{id}_{HHMMSSmmm}.jpg`（时间戳命名，无 alert_id）
 
 #### Redis 实时统计模块 (Real-time Statistics)
 - **功能：** 提供实时统计数据，减少 MySQL 查询压力
@@ -257,9 +259,15 @@
 ```json
 {
   "status": "ok",
+  "timestamp": "2026-04-16T12:00:00+08:00",
   "uptime_sec": 1234,
   "ws_clients": 2,
   "camera_count": 1,
+  "subsystems": {
+    "database": "ok",
+    "redis": "disabled",
+    "model": "ok"
+  },
   "cameras": [
     {
       "camera_id": 0,
@@ -279,6 +287,7 @@
 ```
 
 > `status` 取值：`"ok"`（全部摄像头在线且模型已加载）/ `"degraded"`（任意摄像头断线或模型未加载）
+> `subsystems.database` / `subsystems.redis` / `subsystems.model` 取值：`"ok"` / `"disabled"` / `"error"` / `"not_loaded"` / `"no_camera"`
 
 #### 接口七：最近日志查询 (HTTP)
 - **路径：** `GET /api/logs?limit=100`
@@ -293,6 +302,7 @@
   - `start_time` (ISO 8601, 可选): 起始时间
   - `end_time` (ISO 8601, 可选): 结束时间
   - `level` (string, 可选): 告警级别 (low/medium/high)
+  - `order` (string, 默认 `desc`): 排序方向 (`asc` / `desc`)
 - **返回示例：**
 ```json
 {
@@ -306,7 +316,7 @@
       "camera_id": 0,
       "person_count": 3,
       "new_track_ids": [1, 2, 3],
-      "screenshot_path": "data/screenshots/2026-04-16/cam0_alert_456.jpg",
+      "screenshot_path": "2026-04-16/cam0_183015123.jpg",
       "message": "检测到 3 名新出现人员",
       "level": "high"
     }
@@ -314,13 +324,13 @@
 }
 ```
 
-#### 接口八：告警截图获取 (HTTP)
+#### 接口九：告警截图获取 (HTTP)
 - **路径：** `GET /api/alerts/{id}/screenshot`
 - **功能：** 返回指定告警的截图
 - **响应头：** `Content-Type: image/jpeg`
 - **错误处理：** 404 Not Found（截图不存在或已过期）
 
-#### 接口九：实时统计数据 (HTTP)
+#### 接口十：实时统计数据 (HTTP)
 - **路径：** `GET /api/stats`
 - **功能：** 获取 Redis 实时统计数据（需启用 Redis）
 - **返回示例：**
@@ -362,7 +372,7 @@
 #### 实时告警面板 (Live Alert Panel)
 - 列表视图，展示 WebSocket 最新告警
 - 新告警触发 UI 高亮动画
-- 最多保留最近 50 条，避免内存增长
+- 最多保留最近 200 条，避免内存增长
 
 #### 系统状态栏 (Status Bar)
 - 展示 WebSocket 连接状态（connecting / connected / disconnected / error）
@@ -386,7 +396,7 @@
 - 页面加载后连接 `WS /ws/alert`
 - 实现 `onopen/onmessage/onerror/onclose`
 - 断线重连：初始 2 秒，指数退避至 30 秒
-- **心跳机制：** 20 秒发送一次 `"ping"` 文本消息，后端回复 `{"type":"pong", "timestamp":"..."}`
+- **心跳机制：** 15 秒发送一次 `"ping"` 文本消息，后端回复 `{"type":"pong", "timestamp":"..."}`
 - **心跳定时器管理：** 连接关闭时清理旧心跳定时器（`clearInterval`），避免重复定时器泄漏
 
 #### DOM 动态更新

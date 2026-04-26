@@ -11,6 +11,9 @@ from typing import Optional, Dict, List
 from pathlib import Path
 import aiohttp
 
+_TIMEOUT_SHORT = aiohttp.ClientTimeout(total=10)
+_TIMEOUT_UPLOAD = aiohttp.ClientTimeout(total=30)
+
 
 class FeishuNotifier:
     """飞书推送通知器"""
@@ -90,7 +93,7 @@ class FeishuNotifier:
         for attempt in range(1, 3):  # 最多重试 2 次
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.post(self.webhook_url, json=card, timeout=10) as resp:
+                    async with session.post(self.webhook_url, json=card, timeout=_TIMEOUT_SHORT) as resp:
                         if resp.status == 200:
                             self.logger.info("飞书群消息推送成功")
                             return

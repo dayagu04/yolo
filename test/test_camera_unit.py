@@ -1,5 +1,5 @@
 """
-Camera 模块单元测试
+Camera 模块单元测试（对应 PersonTracker + ScreenshotManager 拆分后的接口）
 """
 import pytest
 import numpy as np
@@ -11,6 +11,8 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
 from backend.camera import CameraManager
+from backend.tracker import PersonTracker
+from backend.screenshot import ScreenshotManager
 
 
 @pytest.mark.unit
@@ -43,32 +45,6 @@ class TestCameraManager:
         assert camera.conf_threshold == 0.5
         assert camera.running is False
         assert camera.cap is None
-
-    def test_iou_calculation(self):
-        """测试 IoU 计算"""
-        box1 = (0, 0, 10, 10)
-        box2 = (5, 5, 15, 15)
-
-        iou = CameraManager._iou(box1, box2)
-
-        # 交集面积 = 5*5 = 25，并集面积 = 100 + 100 - 25 = 175
-        assert 0.14 < iou < 0.15
-
-    def test_iou_no_overlap(self):
-        """测试无重叠的 IoU"""
-        box1 = (0, 0, 10, 10)
-        box2 = (20, 20, 30, 30)
-
-        iou = CameraManager._iou(box1, box2)
-        assert iou == 0.0
-
-    def test_iou_complete_overlap(self):
-        """测试完全重叠的 IoU"""
-        box1 = (0, 0, 10, 10)
-        box2 = (0, 0, 10, 10)
-
-        iou = CameraManager._iou(box1, box2)
-        assert iou == 1.0
 
     @patch('cv2.VideoCapture')
     def test_open_camera_success(self, mock_cv2, camera):
@@ -132,88 +108,6 @@ class TestCameraManager:
         assert status["model_loaded"] is False
         assert status["running"] is False
 
-    def test_associate_tracks_new_detection(self, camera):
-        """测试新检测的 Track 关联"""
-        boxes = [(10, 10, 50, 50)]
-        now_ts = 1000.0
-
-        track_ids = camera._associate_tracks(boxes, now_ts)
-
-        assert len(track_ids) == 1
-        assert len(camera._tracks) == 1
-
-    def test_associate_tracks_existing_detection(self, camera):
-        """测试已存在检测的 Track 关联"""
-        boxes1 = [(10, 10, 50, 50)]
-        track_ids1 = camera._associate_tracks(boxes1, 1000.0)
-
-        # 位置略有变化
-        boxes2 = [(12, 12, 52, 52)]
-        track_ids2 = camera._associate_tracks(boxes2, 1001.0)
-
-        # 应该关联到同一个 Track
-        assert track_ids1[0] == track_ids2[0]
-        assert len(camera._tracks) == 1
-
-    def test_associate_tracks_expired(self, camera):
-        """测试过期 Track 清理"""
-        camera._track_ttl_sec = 5
-
-        boxes1 = [(10, 10, 50, 50)]
-        camera._associate_tracks(boxes1, 1000.0)
-
-        # 6秒后再次检测（超过 TTL）
-        boxes2 = [(10, 10, 50, 50)]
-        camera._associate_tracks(boxes2, 1006.0)
-
-        # 旧 Track 应该被清理，创建新 Track
-        assert len(camera._tracks) == 1
-
-    @patch('cv2.imwrite')
-    def test_save_screenshot(self, mock_imwrite, camera, tmp_path):
-        """测试保存截图"""
-        camera.screenshot_config["save_dir"] = str(tmp_path)
-        mock_imwrite.return_value = True
-
-        frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        path = camera._save_screenshot(frame)
-
-        assert path is not None
-        assert ".jpg" in path
-        mock_imwrite.assert_called_once()
-
-    def test_should_save_screenshot_first_only(self, camera):
-        """测试首次截图模式"""
-        camera.screenshot_config["save_mode"] = "first_only"
-        camera._alert_total = 0
-
-        assert camera._should_save_screenshot(1000.0) is True
-
-        camera._alert_total = 1
-        assert camera._should_save_screenshot(1001.0) is False
-
-    def test_should_save_screenshot_all(self, camera):
-        """测试全部截图模式"""
-        camera.screenshot_config["save_mode"] = "all"
-
-        assert camera._should_save_screenshot(1000.0) is True
-        assert camera._should_save_screenshot(1001.0) is True
-
-    def test_should_save_screenshot_interval(self, camera):
-        """测试间隔截图模式"""
-        camera.screenshot_config["save_mode"] = "interval"
-        camera.screenshot_config["interval_sec"] = 10
-        camera._last_screenshot_ts = 1000.0
-
-        assert camera._should_save_screenshot(1005.0) is False
-        assert camera._should_save_screenshot(1011.0) is True
-
-    def test_should_save_screenshot_disabled(self, camera):
-        """测试截图禁用"""
-        camera.screenshot_config["enabled"] = False
-
-        assert camera._should_save_screenshot(1000.0) is False
-
     def test_get_frame_no_frame(self, camera):
         """测试获取帧（无帧）"""
         camera.frame = None
@@ -272,42 +166,6 @@ class TestCameraManager:
         # 不抛出异常即为正确格式
         datetime.fromisoformat(ts)
 
-    @pytest.mark.boundary
-    def test_track_id_overflow(self, camera):
-        """测试 Track ID 溢出"""
-        camera._next_track_id = 2**31 - 1
-
-        boxes = [(10, 10, 50, 50)]
-        track_ids = camera._associate_tracks(boxes, 1000.0)
-
-        assert len(track_ids) == 1
-
-    @pytest.mark.boundary
-    def test_empty_boxes(self, camera):
-        """测试空检测框"""
-        boxes = []
-        track_ids = camera._associate_tracks(boxes, 1000.0)
-
-        assert len(track_ids) == 0
-
-    @pytest.mark.boundary
-    def test_many_detections(self, camera):
-        """测试大量检测"""
-        boxes = [(i * 10, i * 10, i * 10 + 40, i * 10 + 40) for i in range(100)]
-        track_ids = camera._associate_tracks(boxes, 1000.0)
-
-        assert len(track_ids) == 100
-        assert len(camera._tracks) == 100
-
-    @pytest.mark.boundary
-    def test_iou_zero_area_box(self):
-        """测试零面积检测框"""
-        box1 = (5, 5, 5, 5)  # 零面积
-        box2 = (0, 0, 10, 10)
-
-        iou = CameraManager._iou(box1, box2)
-        assert iou == 0.0
-
     def test_camera_with_db_manager(self, screenshot_config):
         """测试带数据库管理器的摄像头"""
         mock_db = Mock()
@@ -354,3 +212,225 @@ class TestCameraManager:
 
                 # 清理
                 camera.running = False
+
+    def test_alert_cooldown_proxy(self, camera):
+        """测试告警冷却时间属性代理到 tracker"""
+        camera._alert_cooldown_sec = 30.0
+        assert camera.tracker.alert_cooldown_sec == 30.0
+        assert camera._alert_cooldown_sec == 30.0
+
+    def test_track_ttl_proxy(self, camera):
+        """测试轨迹 TTL 属性代理到 tracker"""
+        camera._track_ttl_sec = 10.0
+        assert camera.tracker.track_ttl_sec == 10.0
+        assert camera._track_ttl_sec == 10.0
+
+
+@pytest.mark.unit
+class TestPersonTracker:
+    """PersonTracker 单元测试"""
+
+    @pytest.fixture
+    def tracker(self):
+        return PersonTracker(track_ttl_sec=5.0, alert_cooldown_sec=3.0)
+
+    def test_iou_calculation(self, tracker):
+        """测试 IoU 计算"""
+        box1 = (0, 0, 10, 10)
+        box2 = (5, 5, 15, 15)
+
+        iou = PersonTracker._iou(box1, box2)
+
+        # 交集面积 = 5*5 = 25，并集面积 = 100 + 100 - 25 = 175
+        assert 0.14 < iou < 0.15
+
+    def test_iou_no_overlap(self, tracker):
+        """测试无重叠的 IoU"""
+        box1 = (0, 0, 10, 10)
+        box2 = (20, 20, 30, 30)
+
+        iou = PersonTracker._iou(box1, box2)
+        assert iou == 0.0
+
+    def test_iou_complete_overlap(self, tracker):
+        """测试完全重叠的 IoU"""
+        box1 = (0, 0, 10, 10)
+        box2 = (0, 0, 10, 10)
+
+        iou = PersonTracker._iou(box1, box2)
+        assert iou == 1.0
+
+    def test_iou_zero_area_box(self):
+        """测试零面积检测框"""
+        box1 = (5, 5, 5, 5)  # 零面积
+        box2 = (0, 0, 10, 10)
+
+        iou = PersonTracker._iou(box1, box2)
+        assert iou == 0.0
+
+    def test_associate_tracks_new_detection(self, tracker):
+        """测试新检测的 Track 关联"""
+        boxes = [(10, 10, 50, 50)]
+        now_ts = 1000.0
+
+        track_ids = tracker.associate(boxes, now_ts)
+
+        assert len(track_ids) == 1
+        assert len(tracker._tracks) == 1
+
+    def test_associate_tracks_existing_detection(self, tracker):
+        """测试已存在检测的 Track 关联"""
+        boxes1 = [(10, 10, 50, 50)]
+        track_ids1 = tracker.associate(boxes1, 1000.0)
+
+        # 位置略有变化
+        boxes2 = [(12, 12, 52, 52)]
+        track_ids2 = tracker.associate(boxes2, 1001.0)
+
+        # 应该关联到同一个 Track
+        assert track_ids1[0] == track_ids2[0]
+        assert len(tracker._tracks) == 1
+
+    def test_associate_tracks_expired(self, tracker):
+        """测试过期 Track 清理"""
+        tracker.track_ttl_sec = 5
+
+        boxes1 = [(10, 10, 50, 50)]
+        tracker.associate(boxes1, 1000.0)
+
+        # 6秒后再次检测（超过 TTL）
+        boxes2 = [(10, 10, 50, 50)]
+        tracker.associate(boxes2, 1006.0)
+
+        # 旧 Track 应该被清理，创建新 Track
+        assert len(tracker._tracks) == 1
+
+    def test_empty_boxes(self, tracker):
+        """测试空检测框"""
+        track_ids = tracker.associate([], 1000.0)
+        assert len(track_ids) == 0
+
+    def test_many_detections(self, tracker):
+        """测试大量检测"""
+        boxes = [(i * 100, i * 100, i * 100 + 40, i * 100 + 40) for i in range(50)]
+        track_ids = tracker.associate(boxes, 1000.0)
+
+        assert len(track_ids) == 50
+        assert len(tracker._tracks) == 50
+
+    def test_track_id_overflow(self, tracker):
+        """测试 Track ID 溢出"""
+        tracker._next_track_id = 2**31 - 1
+
+        boxes = [(10, 10, 50, 50)]
+        track_ids = tracker.associate(boxes, 1000.0)
+
+        assert len(track_ids) == 1
+
+    def test_get_pending_tracks_cooldown(self, tracker):
+        """测试告警冷却期内不返回待告警轨迹"""
+        boxes = [(10, 10, 50, 50)]
+        active_ids = tracker.associate(boxes, 1000.0)
+        # 第一次告警
+        pending = tracker.get_pending_tracks(active_ids, 1000.0)
+        tracker.mark_alerted(pending, 1000.0)
+
+        # 新轨迹，但在冷却期内
+        boxes2 = [(200, 200, 240, 240)]
+        active_ids2 = tracker.associate(boxes2, 1001.0)
+        pending2 = tracker.get_pending_tracks(active_ids2, 1001.0)
+
+        assert pending2 == []
+
+    def test_active_count(self, tracker):
+        """测试活跃轨迹计数"""
+        assert tracker.active_count == 0
+
+        boxes = [(10, 10, 50, 50), (200, 200, 240, 240)]
+        tracker.associate(boxes, 1000.0)
+
+        assert tracker.active_count == 2
+
+
+@pytest.mark.unit
+class TestScreenshotManager:
+    """ScreenshotManager 单元测试"""
+
+    @pytest.fixture
+    def mgr_first_only(self, tmp_path):
+        config = {
+            "enabled": True,
+            "save_mode": "first_only",
+            "quality": 75,
+            "save_dir": "screenshots",
+        }
+        return ScreenshotManager(camera_id=0, config=config, root_path=tmp_path)
+
+    @pytest.fixture
+    def mgr_all(self, tmp_path):
+        config = {
+            "enabled": True,
+            "save_mode": "all",
+            "quality": 75,
+            "save_dir": "screenshots",
+        }
+        return ScreenshotManager(camera_id=0, config=config, root_path=tmp_path)
+
+    @pytest.fixture
+    def mgr_interval(self, tmp_path):
+        config = {
+            "enabled": True,
+            "save_mode": "interval",
+            "interval_sec": 10,
+            "quality": 75,
+            "save_dir": "screenshots",
+        }
+        return ScreenshotManager(camera_id=0, config=config, root_path=tmp_path)
+
+    @pytest.fixture
+    def mgr_disabled(self, tmp_path):
+        config = {
+            "enabled": False,
+            "save_mode": "all",
+            "save_dir": "screenshots",
+        }
+        return ScreenshotManager(camera_id=0, config=config, root_path=tmp_path)
+
+    def test_should_save_first_only(self, mgr_first_only):
+        """测试首次截图模式"""
+        assert mgr_first_only.should_save(1000.0, alert_total=0) is True
+        assert mgr_first_only.should_save(1001.0, alert_total=1) is False
+
+    def test_should_save_all(self, mgr_all):
+        """测试全部截图模式"""
+        assert mgr_all.should_save(1000.0, alert_total=0) is True
+        assert mgr_all.should_save(1001.0, alert_total=5) is True
+
+    def test_should_save_interval(self, mgr_interval):
+        """测试间隔截图模式"""
+        mgr_interval._last_ts = 1000.0
+        assert mgr_interval.should_save(1005.0, alert_total=0) is False
+        assert mgr_interval.should_save(1011.0, alert_total=0) is True
+
+    def test_should_save_disabled(self, mgr_disabled):
+        """测试截图禁用"""
+        assert mgr_disabled.should_save(1000.0, alert_total=0) is False
+
+    @patch('cv2.imwrite')
+    def test_save_screenshot(self, mock_imwrite, mgr_all):
+        """测试保存截图返回相对路径"""
+        mock_imwrite.return_value = True
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        path = mgr_all.save(frame, 1000.0)
+
+        assert path is not None
+        assert ".jpg" in path
+        mock_imwrite.assert_called_once()
+
+    @patch('cv2.imwrite', side_effect=OSError("磁盘满"))
+    def test_save_screenshot_failure(self, mock_imwrite, mgr_all):
+        """测试保存失败时返回 None"""
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        path = mgr_all.save(frame, 1000.0)
+        assert path is None

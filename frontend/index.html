@@ -246,6 +246,7 @@
       padding: 20px;
     }
     .muted-text { color: var(--muted); }
+    .thumb {
       width: 48px; height: 27px;
       object-fit: cover; border-radius: 3px;
       cursor: pointer; border: 1px solid var(--border);
@@ -337,9 +338,9 @@
   </div>
   <div class="sep"></div>
   <div class="tabs">
-    <button type="button" class="tab-btn active" onclick="switchTab('monitor')">监控视图</button>
-    <button type="button" class="tab-btn" onclick="switchTab('stats')">统计面板</button>
-    <button type="button" class="tab-btn" onclick="switchTab('alerts')">告警历史</button>
+    <button type="button" class="tab-btn active" onclick="switchTab('monitor', this)">监控视图</button>
+    <button type="button" class="tab-btn" onclick="switchTab('stats', this)">统计面板</button>
+    <button type="button" class="tab-btn" onclick="switchTab('alerts', this)">告警历史</button>
   </div>
 </header>
 
@@ -471,11 +472,11 @@ let footerInterval = null;
 let alertData = [];
 
 // ── Tab ──
-function switchTab(name) {
+function switchTab(name, btn) {
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
-  event.target.classList.add('active');
+  if (btn) btn.classList.add('active');
 
   if (name === 'stats') {
     initCharts();
@@ -490,6 +491,8 @@ function switchTab(name) {
 }
 
 // ── WebSocket ──
+let _wsPingInterval = null;
+
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws/alert`);
@@ -497,7 +500,8 @@ function connectWS() {
   ws.onopen = () => {
     wsRetry = 0;
     setWsDot('connected', '已连接');
-    setInterval(() => ws.readyState === 1 && ws.send('ping'), 15000);
+    if (_wsPingInterval) clearInterval(_wsPingInterval);
+    _wsPingInterval = setInterval(() => ws && ws.readyState === 1 && ws.send('ping'), 15000);
   };
 
   ws.onmessage = e => handleMessage(JSON.parse(e.data));
@@ -615,11 +619,17 @@ function populateCameraFilter() {
 
 // ── Stats Panel ──
 function initCharts() {
+  const trendEl = document.getElementById('chart-trend');
+  const pieEl = document.getElementById('chart-pie');
+  if (!trendEl || !pieEl) return;
+
   if (!chartTrend) {
-    chartTrend = echarts.init(document.getElementById('chart-trend'), 'dark');
+    trendEl.innerHTML = '';
+    chartTrend = echarts.init(trendEl, 'dark');
   }
   if (!chartPie) {
-    chartPie = echarts.init(document.getElementById('chart-pie'), 'dark');
+    pieEl.innerHTML = '';
+    chartPie = echarts.init(pieEl, 'dark');
   }
 }
 
@@ -633,10 +643,14 @@ async function loadStats() {
     const data = await res.json();
     if (data.error) { showStatsDisabled(); return; }
 
+    initCharts();
+    if (!chartTrend || !chartPie) return;
+
     // Cards
     document.getElementById('stat-today').textContent = data.today_alerts ?? '—';
-    document.getElementById('stat-persons').textContent = data.current_persons ?? '—';
-    document.getElementById('stat-total').textContent = data.today_alerts ?? '—';
+    const personsMap = data.current_persons || {};
+    const totalPersons = Object.values(personsMap).reduce((s, v) => s + (parseInt(v) || 0), 0);
+    document.getElementById('stat-persons').textContent = totalPersons;
 
     // Trend chart
     const hourly = data.hourly_alerts || {};
@@ -681,6 +695,8 @@ async function loadStats() {
 }
 
 function showStatsDisabled() {
+  if (chartTrend) { chartTrend.dispose(); chartTrend = null; }
+  if (chartPie)   { chartPie.dispose();   chartPie = null;   }
   const panel = document.getElementById('stats-panel');
   const boxes = panel.querySelectorAll('.chart-box');
   boxes.forEach(b => {
@@ -817,6 +833,8 @@ async function loadHealth() {
     // Update stat cards
     const online = (data.cameras || []).filter(c => c.connected).length;
     const total = data.camera_count || 0;
+    const totalAlerts = (data.cameras || []).reduce((s, c) => s + (c.alert_total || 0), 0);
+    document.getElementById('stat-total').textContent = totalAlerts;
     document.getElementById('stat-cams').textContent = `${online}`;
     document.getElementById('ft-cams').textContent = `${online}/${total}`;
 

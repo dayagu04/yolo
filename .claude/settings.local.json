@@ -67,7 +67,11 @@
       "Bash(python -m pytest test/test_main_unit.py::TestDynamicCameraAPI test/test_main_unit.py::TestCameraSignalCallback -v --tb=short)",
       "Bash(python -m pytest test/test_main_unit.py::TestDynamicCameraAPI test/test_main_unit.py::TestCameraSignalCallback -q)",
       "Bash(dir \"n:\\\\yolo\\\\data\\\\screenshots\" /s /b)",
-      "Bash(findstr \".jpg\")"
+      "Bash(findstr \".jpg\")",
+      "Bash(pytest -q)",
+      "Bash(python -m pytest test/ -q --ignore=test/test_camera.py --ignore=test/test_cam.py --ignore=test/test_system.py --ignore=test/test_system_backup.py)",
+      "Bash(python -m pytest test/test_camera_unit.py test/test_notifier_unit.py test/test_utils_unit.py test/test_main_unit.py -q)",
+      "Bash(python -m pytest test/test_camera_unit.py::TestCameraManager::test_associate_tracks_new_detection test/test_camera_unit.py::TestCameraManager::test_save_screenshot -v)"
     ]
   }
 }
