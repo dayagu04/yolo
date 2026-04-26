@@ -39,7 +39,15 @@
       "Bash(curl -s -X POST http://localhost:8000/api/camera/0/start)",
       "Bash(curl -s \"http://localhost:8000/api/alerts?limit=10\")",
       "Bash(curl -s \"http://localhost:8000/api/cameras\")",
-      "Bash(curl -s \"http://localhost:8000/api/logs?limit=20\")"
+      "Bash(curl -s \"http://localhost:8000/api/logs?limit=20\")",
+      "Bash(python test/test_system.py)",
+      "Bash(curl -s http://localhost:8000/)",
+      "Bash(awk '{print $2}')",
+      "Bash(xargs kill *)",
+      "Bash(pip install *)",
+      "Bash(cd /d n:\\\\yolo)",
+      "Bash(pytest test/test_config.py test/test_database.py test/test_api.py test/test_camera.py -v --tb=short)",
+      "Bash(pytest test/test_config.py -v --tb=short)"
     ]
   }
 }
