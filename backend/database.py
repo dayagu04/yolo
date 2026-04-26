@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
+from contextlib import contextmanager
 import logging
 
 Base = declarative_base()
@@ -105,8 +106,20 @@ class DatabaseManager:
         self.logger.info("数据库表初始化完成")
 
     def get_session(self) -> Session:
-        """获取数据库会话"""
         return self.SessionLocal()
+
+    @contextmanager
+    def _session(self):
+        """自动提交/回滚/关闭的会话上下文管理器"""
+        session = self.SessionLocal()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
     def create_alert(
         self,
@@ -117,13 +130,7 @@ class DatabaseManager:
         message: str = "",
         level: str = "high",
     ) -> int:
-        """
-        创建告警记录
-        Returns:
-            告警 ID
-        """
-        session = self.get_session()
-        try:
+        with self._session() as session:
             alert = Alert(
                 timestamp=datetime.now(),
                 camera_id=camera_id,
@@ -134,16 +141,10 @@ class DatabaseManager:
                 level=level,
             )
             session.add(alert)
-            session.commit()
+            session.flush()
             alert_id = alert.id
             self.logger.info(f"告警已保存: ID={alert_id}, camera={camera_id}")
             return alert_id
-        except Exception as e:
-            session.rollback()
-            self.logger.error(f"保存告警失败: {e}")
-            raise
-        finally:
-            session.close()
 
     def query_alerts(
         self,
@@ -155,22 +156,11 @@ class DatabaseManager:
         level: Optional[str] = None,
         order: str = "desc",
     ) -> Dict[str, any]:
-        """
-        查询告警记录
-        Args:
-            order: 排序方式 "asc" 或 "desc"
-        Returns:
-            {"total": int, "alerts": List[dict]}
-        """
-        # 参数验证
-        limit = max(1, min(500, limit))  # 限制在 1-500 之间
-        offset = max(0, offset)  # 不允许负数
+        limit = max(1, min(500, limit))
+        offset = max(0, offset)
 
-        session = self.get_session()
-        try:
+        with self._session() as session:
             query = session.query(Alert)
-
-            # 筛选条件
             if camera_id is not None:
                 query = query.filter(Alert.camera_id == camera_id)
             if start_time:
@@ -180,74 +170,33 @@ class DatabaseManager:
             if level:
                 query = query.filter(Alert.level == level)
 
-            # 总数
             total = query.count()
-
-            # 分页查询
             order_by = Alert.timestamp.desc() if order == "desc" else Alert.timestamp.asc()
-            alerts = (
-                query.order_by(order_by)
-                .limit(limit)
-                .offset(offset)
-                .all()
-            )
-
-            return {
-                "total": total,
-                "alerts": [alert.to_dict() for alert in alerts],
-            }
-        finally:
-            session.close()
+            alerts = query.order_by(order_by).limit(limit).offset(offset).all()
+            return {"total": total, "alerts": [a.to_dict() for a in alerts]}
 
     def get_alert_by_id(self, alert_id: int) -> Optional[dict]:
-        """根据 ID 获取告警记录"""
-        session = self.get_session()
-        try:
+        with self._session() as session:
             alert = session.query(Alert).filter(Alert.id == alert_id).first()
             return alert.to_dict() if alert else None
-        finally:
-            session.close()
 
     def delete_old_alerts(self, days: int = 30) -> int:
-        """
-        删除指定天数之前的告警记录
-        Returns:
-            删除的记录数
-        """
-        session = self.get_session()
-        try:
+        with self._session() as session:
             cutoff = datetime.now() - timedelta(days=days)
             count = session.query(Alert).filter(Alert.timestamp < cutoff).delete()
-            session.commit()
             self.logger.info(f"已删除 {count} 条过期告警记录（{days} 天前）")
             return count
-        except Exception as e:
-            session.rollback()
-            self.logger.error(f"删除过期告警失败: {e}")
-            raise
-        finally:
-            session.close()
 
     def update_camera_status(
         self, camera_id: int, status: str, resolution: Optional[str] = None
     ):
-        """更新摄像头状态"""
-        session = self.get_session()
-        try:
+        with self._session() as session:
             camera = session.query(Camera).filter(Camera.id == camera_id).first()
             if not camera:
                 camera = Camera(id=camera_id, name=f"Camera {camera_id}")
                 session.add(camera)
-
             camera.status = status
             camera.last_seen = datetime.now()
             if resolution:
                 camera.resolution = resolution
-
-            session.commit()
-        except Exception as e:
-            session.rollback()
-            self.logger.error(f"更新摄像头状态失败: {e}")
-        finally:
-            session.close()
 

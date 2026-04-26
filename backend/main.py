@@ -468,13 +468,13 @@ async def get_alert_screenshot(alert_id: int):
         raise HTTPException(status_code=503, detail="数据库未配置")
     try:
         alert = db_manager.get_alert_by_id(alert_id)
-        if not alert or not alert.screenshot_path:
+        if not alert or not alert.get("screenshot_path"):
             raise HTTPException(status_code=404, detail="截图不存在")
 
         save_dir = config.get("alert", {}).get("screenshot", {}).get(
             "save_dir", "data/screenshots"
         )
-        screenshot_file = ROOT / save_dir / alert.screenshot_path
+        screenshot_file = ROOT / save_dir / alert["screenshot_path"]
         if not screenshot_file.exists():
             raise HTTPException(status_code=404, detail="截图文件已删除")
 
