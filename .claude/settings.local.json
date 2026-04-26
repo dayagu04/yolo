@@ -47,7 +47,23 @@
       "Bash(pip install *)",
       "Bash(cd /d n:\\\\yolo)",
       "Bash(pytest test/test_config.py test/test_database.py test/test_api.py test/test_camera.py -v --tb=short)",
-      "Bash(pytest test/test_config.py -v --tb=short)"
+      "Bash(pytest test/test_config.py -v --tb=short)",
+      "Bash(pytest test/test_camera_unit.py test/test_notifier_unit.py test/test_utils_unit.py -v --cov=backend --cov-report=term-missing --cov-report=html:tmp/coverage_html)",
+      "Bash(pytest test/ -v --cov=backend --cov-report=term --cov-report=html:tmp/coverage_html)",
+      "Bash(pytest test/ -v --cov=backend --cov-report=term --cov-report=html:tmp/coverage_html --tb=short)",
+      "Bash(pytest test/test_*_unit.py test/test_config.py test/test_database.py -v --cov=backend --cov-report=term)",
+      "Bash(pytest test/test_api.py::TestBackendAPI::test_health_check -v -s)",
+      "Bash(pytest test/test_api.py::TestBackendAPI::test_alerts_query -v -s)",
+      "Bash(pytest test/test_api.py -v --tb=short)",
+      "Bash(pytest test/test_camera.py -v --tb=line)",
+      "Bash(pytest test/ -v --tb=no -q)",
+      "Bash(tasklist)",
+      "Bash(findstr python *)",
+      "Bash(pytest scripts/test/test_camera.py::TestCameraFunctions::test_camera_status_query -v -s)",
+      "Bash(pytest scripts/test/ -v --cov=backend --cov-report=html:tmp/coverage_html --html=tmp/pytest_report.html --self-contained-html)",
+      "Bash(pytest scripts/test/test_camera.py::TestCameraFunctions::test_camera_status_query scripts/test/test_api.py::TestBackendAPI::test_missing_required_fields -v -s)",
+      "Bash(tee tmp/test_full_run.log)",
+      "Bash(pytest scripts/test/test_camera.py scripts/test/test_api.py -v --cov=backend --cov-report=html:tmp/coverage_html --html=tmp/pytest_report.html --self-contained-html)"
     ]
   }
 }

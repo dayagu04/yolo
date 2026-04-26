@@ -510,6 +510,7 @@ class SystemTester:
 
         # 测试 3: 检查视频流
         start = time.time()
+        resp = None
         try:
             resp = requests.get(f"{self.base_url}/video_feed?camera_id=0",
                                 timeout=3, stream=True)
@@ -529,6 +530,9 @@ class SystemTester:
         except Exception as e:
             duration = time.time() - start
             self.result.add_result(module, "视频流测试", "FAIL", str(e), duration)
+        finally:
+            if resp:
+                resp.close()  # 关闭视频流连接
 
     async def test_backend_api_advanced(self):
         """测试后端 API 高级功能"""

@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 # 添加项目根目录到路径
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -35,15 +35,57 @@ def config():
 @pytest.fixture(scope="session")
 def backend_server():
     """启动后端服务"""
+    import requests
+    import os
+
     print("\n启动后端服务...")
+
+    # 使用测试配置（禁用摄像头自动启动）
+    env = os.environ.copy()
+    env["CONFIG_FILE"] = "config.test.yaml"
+
     process = subprocess.Popen(
         [sys.executable, "backend/main.py"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        cwd=ROOT
+        cwd=ROOT,
+        env=env
     )
-    time.sleep(6)  # 等待服务启动
-    print("后端服务已启动")
+
+    # 健康检查等待（最多30秒）
+    start = time.time()
+    ready = False
+    while time.time() - start < 30:
+        try:
+            resp = requests.get("http://localhost:8000/health", timeout=2)
+            if resp.status_code == 200:
+                ready = True
+                break
+        except Exception:
+            pass
+        time.sleep(1)
+
+    if not ready:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+        raise RuntimeError("后端服务启动超时")
+
+    print("后端服务已启动（使用测试配置，摄像头按需启动）")
+
+    # 预热摄像头（让摄像头提前初始化，避免测试时超时）
+    print("预热摄像头...")
+    try:
+        resp = requests.get("http://localhost:8000/api/camera/0/status", timeout=30)
+        if resp.status_code == 200:
+            print("摄像头预热完成")
+        else:
+            print(f"摄像头预热失败: HTTP {resp.status_code}")
+    except Exception as e:
+        print(f"摄像头预热异常: {e}")
+        print("警告: 摄像头可能不可用，相关测试可能失败")
 
     yield process
 
@@ -53,7 +95,12 @@ def backend_server():
     try:
         process.wait(timeout=10)
     except subprocess.TimeoutExpired:
+        print("后端服务未响应，强制终止...")
         process.kill()
+        process.wait()
+
+    # 额外等待，确保摄像头资源释放
+    time.sleep(2)
     print("后端服务已停止，资源已释放")
 
 

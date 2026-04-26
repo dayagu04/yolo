@@ -6,7 +6,7 @@ import requests
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).parent.parent.parent
 
 
 @pytest.mark.camera
@@ -60,13 +60,16 @@ class TestCameraFunctions:
         """测试视频流"""
         resp = requests.get(f"{base_url}/video_feed?camera_id=0",
                             timeout=3, stream=True)
-        assert resp.status_code == 200
+        try:
+            assert resp.status_code == 200
 
-        # 验证 MJPEG 流格式
-        chunk = next(resp.iter_content(1024), None)
-        assert chunk is not None
-        assert b"--frame" in chunk
-        assert b"Content-Type: image/jpeg" in chunk
+            # 验证 MJPEG 流格式
+            chunk = next(resp.iter_content(1024), None)
+            assert chunk is not None
+            assert b"--frame" in chunk
+            assert b"Content-Type: image/jpeg" in chunk
+        finally:
+            resp.close()  # 关闭视频流连接
 
     def test_detection_config_update(self, base_url):
         """测试检测配置更新"""
@@ -154,16 +157,18 @@ class TestCameraFunctions:
         start = time.time()
         resp = requests.get(f"{base_url}/video_feed?camera_id=0",
                             timeout=5, stream=True)
+        try:
+            # 读取 10 帧
+            frames = 0
+            for chunk in resp.iter_content(chunk_size=8192):
+                if b"--frame" in chunk:
+                    frames += 1
+                if frames >= 10:
+                    break
 
-        # 读取 10 帧
-        frames = 0
-        for chunk in resp.iter_content(chunk_size=8192):
-            if b"--frame" in chunk:
-                frames += 1
-            if frames >= 10:
-                break
+            duration = time.time() - start
+            fps = frames / duration
 
-        duration = time.time() - start
-        fps = frames / duration
-
-        assert fps > 5, f"视频流 FPS {fps:.1f} 太低"
+            assert fps > 5, f"视频流 FPS {fps:.1f} 太低"
+        finally:
+            resp.close()  # 关闭视频流连接

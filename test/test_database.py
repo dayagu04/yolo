@@ -134,10 +134,11 @@ class TestDatabaseOperations:
 
     @pytest.mark.boundary
     def test_query_with_negative_offset(self, db_manager):
-        """测试负数 offset"""
+        """测试负数 offset（应该被修正为0）"""
         result = db_manager.query_alerts(offset=-1)
-        # 应该处理为 0 或抛出异常
+        # 应该处理为 0，不抛出异常
         assert result is not None
+        assert "alerts" in result
 
     @pytest.mark.exception
     def test_database_connection_failure(self, config):

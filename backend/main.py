@@ -117,9 +117,12 @@ async def lifespan(app: FastAPI):
     _event_loop = asyncio.get_running_loop()
 
     # ── 启动阶段 ──
-    # 1. 加载并校验配置
+    # 1. 加载并校验配置（支持环境变量指定配置文件）
+    import os
+    config_file = os.environ.get("CONFIG_FILE", "config.yaml")
     try:
-        config = load_and_validate_config(ROOT / "config.yaml")
+        config = load_and_validate_config(ROOT / config_file)
+        print(f"已加载配置文件: {config_file}")
     except ConfigError as e:
         print(f"\n[ERROR] 配置校验失败，服务无法启动:\n{e}\n")
         raise SystemExit(1)

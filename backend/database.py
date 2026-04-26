@@ -3,7 +3,7 @@
 提供告警记录的持久化存储
 """
 from sqlalchemy import (
-    create_engine, Column, Integer, String, DateTime, Text, Enum, JSON, TIMESTAMP
+    create_engine, Column, Integer, String, DateTime, Text, Enum, JSON, TIMESTAMP, text
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
@@ -74,14 +74,25 @@ class DatabaseManager:
             f"?charset={config.get('charset', 'utf8mb4')}"
         )
 
-        # 创建引擎
-        self.engine = create_engine(
-            db_url,
-            poolclass=QueuePool,
-            pool_size=config.get("pool_size", 5),
-            pool_recycle=config.get("pool_recycle", 3600),
-            echo=False,
-        )
+        # 创建引擎（添加连接测试）
+        try:
+            self.engine = create_engine(
+                db_url,
+                poolclass=QueuePool,
+                pool_size=config.get("pool_size", 5),
+                pool_recycle=config.get("pool_recycle", 3600),
+                echo=False,
+                connect_args={"connect_timeout": 5}
+            )
+
+            # 测试连接
+            with self.engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+
+            self.logger.info("数据库连接成功")
+        except Exception as e:
+            self.logger.error(f"数据库连接失败: {e}")
+            raise
 
         # 创建会话工厂
         self.SessionLocal = sessionmaker(
@@ -151,6 +162,10 @@ class DatabaseManager:
         Returns:
             {"total": int, "alerts": List[dict]}
         """
+        # 参数验证
+        limit = max(1, min(500, limit))  # 限制在 1-500 之间
+        offset = max(0, offset)  # 不允许负数
+
         session = self.get_session()
         try:
             query = session.query(Alert)
@@ -184,11 +199,12 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def get_alert_by_id(self, alert_id: int) -> Optional[Alert]:
+    def get_alert_by_id(self, alert_id: int) -> Optional[dict]:
         """根据 ID 获取告警记录"""
         session = self.get_session()
         try:
-            return session.query(Alert).filter(Alert.id == alert_id).first()
+            alert = session.query(Alert).filter(Alert.id == alert_id).first()
+            return alert.to_dict() if alert else None
         finally:
             session.close()
 
