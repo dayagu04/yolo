@@ -1,11 +1,12 @@
 智能视频监控 MVP 阶段：前后端详细设计文档
 
 ## 版本说明
-- **文档版本：** v1.4
-- **最后更新：** 2026-04-16
+- **文档版本：** v1.5
+- **最后更新：** 2026-04-26
 - **实现状态：** 本文档为系统设计的 Source of Truth，代码实现需与此文档保持一致
 - **v1.3 更新：** 新增 MySQL 告警存储、截图保存、Redis 实时统计、告警历史查询 API
 - **v1.4 更新（P0 稳定性）：** FastAPI lifespan 生命周期、健康检查细化、配置校验、截图定时清理、异常处理统一化
+- **v1.5 更新（多摄像头/飞书/稳定性）：** 新增动态摄像头管理 API、飞书线程安全调度、`CONFIG_FILE` 启动配置切换、统计口径对齐
 
 ---
 
@@ -17,11 +18,14 @@
 #### 应用生命周期管理器 (Application Lifespan)
 - 使用 FastAPI `lifespan` 上下文管理替代 `@app.on_event("startup") / @app.on_event("shutdown")`
 - 启动阶段（startup）：
-  1. 加载并校验 `config.yaml`
-  2. 初始化 MySQL 连接
-  3. 初始化 Redis 连接（可选）
-  4. 启动截图清理后台任务
-  5. 写入 `app.startup` 结构化日志
+  1. 加载并校验 `config.yaml`（支持 `CONFIG_FILE` 环境变量指定路径）
+  2. 合并 `config.secrets.yaml`（若存在，优先级高于主配置）
+  3. 初始化 MySQL 连接
+  4. 初始化 Redis 连接（可选）
+  5. 初始化飞书通知器（可选，由 `notifications.feishu.enabled` 控制）
+  6. 启动截图清理后台任务
+  7. 初始化 `config.cameras` 列表中所有摄像头（lifespan 统一预热）
+  8. 写入 `app.startup` 结构化日志
 - 关闭阶段（shutdown）：
   1. 停止所有摄像头线程
   2. 将摄像头从 Redis 在线集合移除
@@ -191,11 +195,61 @@
 - **路径：** `POST /api/camera/{camera_id}/config`
 - **功能：** 动态调整检测开关与置信度阈值
 
-#### 接口四：摄像头运行状态 (HTTP)
+#### 接口四：摄像头列表与动态管理 (HTTP)
+- **路径1：** `GET /api/cameras`
+- **功能：** 返回配置中的摄像头列表及运行状态，供前端网格渲染
+- **返回示例：**
+```json
+{
+  "total": 2,
+  "cameras": [
+    {
+      "id": 0,
+      "name": "本地摄像头",
+      "location": "测试环境",
+      "source": "0",
+      "camera_id": 0,
+      "running": true,
+      "connected": true,
+      "model_loaded": true,
+      "fps": 28.4,
+      "active_tracks": 1,
+      "alert_total": 6
+    }
+  ]
+}
+```
+
+- **路径2：** `POST /api/cameras/{camera_id}/add`
+- **功能：** 动态添加摄像头并立即启动
+- **请求体：**
+```json
+{
+  "source": "rtsp://admin:***@192.168.1.20:554/stream1",
+  "name": "前门摄像头",
+  "location": "一楼前门",
+  "auto_resolution": true,
+  "width": 1280,
+  "height": 720
+}
+```
+- **约束：** `source` 必填；`camera_id` 已存在时返回 `409`
+
+- **路径3：** `POST /api/cameras/{camera_id}/remove`
+- **功能：** 动态移除摄像头并停止线程
+- **返回示例：**
+```json
+{
+  "success": true,
+  "camera_id": 1
+}
+```
+
+#### 接口五：摄像头运行状态 (HTTP)
 - **路径：** `GET /api/camera/{camera_id}/status`
 - **功能：** 查询指定摄像头当前运行状态
 
-#### 接口五：系统健康检查 (HTTP)
+#### 接口六：系统健康检查 (HTTP)
 - **路径：** `GET /health`
 - **功能：** 返回系统整体健康状态（用于前端状态栏与运维）
 
@@ -226,11 +280,11 @@
 
 > `status` 取值：`"ok"`（全部摄像头在线且模型已加载）/ `"degraded"`（任意摄像头断线或模型未加载）
 
-#### 接口六：最近日志查询 (HTTP)
+#### 接口七：最近日志查询 (HTTP)
 - **路径：** `GET /api/logs?limit=100`
 - **功能：** 获取最近结构化日志记录（默认 100 条，最大 500 条）
 
-#### 接口七：告警历史查询 (HTTP)
+#### 接口八：告警历史查询 (HTTP)
 - **路径：** `GET /api/alerts`
 - **查询参数：**
   - `limit` (int, 默认 50): 返回条数

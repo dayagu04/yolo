@@ -66,7 +66,7 @@ async def _run_cleanup():
         wait_sec = (next_run - now).total_seconds()
         await asyncio.sleep(wait_sec)
 
-        await asyncio.get_event_loop().run_in_executor(
+        await asyncio.get_running_loop().run_in_executor(
             None, _do_cleanup, save_dir, retention_days
         )
 
@@ -155,6 +155,9 @@ async def lifespan(app: FastAPI):
     if feishu_cfg.get("enabled"):
         try:
             feishu_notifier = FeishuNotifier(feishu_cfg)
+            # 注入截图根目录，供上传图片时拼接相对路径
+            save_dir = config.get("alert", {}).get("screenshot", {}).get("save_dir", "data/screenshots")
+            feishu_notifier._screenshots_root = ROOT / save_dir
             print("飞书推送已启用")
         except Exception as e:
             print(f"[WARN] 飞书推送初始化失败: {e}")
@@ -231,10 +234,14 @@ def _camera_signal_callback(message: dict):
     if message.get("type") == "log":
         structured_logger._buffer.append(message)
 
-    # 飞书推送（异步，不阻塞）
+    # 飞书推送（线程安全：camera 线程 → 主事件循环）
     if message.get("type") == "alert" and feishu_notifier:
         screenshot_path = message.get("data", {}).get("screenshot_path")
-        asyncio.create_task(feishu_notifier.send_alert(message, screenshot_path))
+        if _event_loop is not None and _event_loop.is_running():
+            _event_loop.call_soon_threadsafe(
+                asyncio.create_task,
+                feishu_notifier.send_alert(message, screenshot_path),
+            )
 
     _dispatch_signal(message)
 
@@ -496,7 +503,7 @@ async def manual_cleanup():
     )
 
     try:
-        await asyncio.get_event_loop().run_in_executor(
+        await asyncio.get_running_loop().run_in_executor(
             None, _do_cleanup, save_dir, retention_days
         )
         return {
@@ -544,6 +551,8 @@ async def list_cameras():
         }
         if cam:
             item.update(cam.get_status())
+            # 前端统一使用 id 字段
+            item["id"] = cam_id
         else:
             item.update({"connected": False, "running": False, "model_loaded": False})
         result.append(item)
@@ -551,9 +560,14 @@ async def list_cameras():
 
 
 @app.post("/api/cameras/{camera_id}/add")
-async def add_camera(camera_id: int, body: dict):
+async def add_camera(camera_id: int, request: Request):
     if camera_id in cameras:
         raise HTTPException(status_code=409, detail=f"摄像头 {camera_id} 已存在")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=422, detail="请求体必须是合法的 JSON")
 
     source = body.get("source")
     if source is None:
@@ -577,7 +591,13 @@ async def add_camera(camera_id: int, body: dict):
             data={"name": cam_cfg["name"], "source": str(source)},
         )
         _dispatch_signal(entry)
-        return cam.get_status()
+        return {
+            "id": camera_id,
+            "name": cam_cfg["name"],
+            "location": cam_cfg["location"],
+            "source": str(cam_cfg["source"]),
+            **cam.get_status(),
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"添加摄像头失败: {e}")
 

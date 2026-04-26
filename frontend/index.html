@@ -636,6 +636,7 @@ async function loadStats() {
     // Cards
     document.getElementById('stat-today').textContent = data.today_alerts ?? '—';
     document.getElementById('stat-persons').textContent = data.current_persons ?? '—';
+    document.getElementById('stat-total').textContent = data.today_alerts ?? '—';
 
     // Trend chart
     const hourly = data.hourly_alerts || {};
@@ -814,8 +815,6 @@ async function loadHealth() {
     document.getElementById('ft-model').textContent = data.subsystems?.model ?? '—';
 
     // Update stat cards
-    const totalAlerts = (data.cameras || []).reduce((s, c) => s + (c.alert_total || 0), 0);
-    document.getElementById('stat-total').textContent = totalAlerts;
     const online = (data.cameras || []).filter(c => c.connected).length;
     const total = data.camera_count || 0;
     document.getElementById('stat-cams').textContent = `${online}`;

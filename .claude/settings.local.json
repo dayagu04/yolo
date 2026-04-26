@@ -63,7 +63,11 @@
       "Bash(pytest scripts/test/ -v --cov=backend --cov-report=html:tmp/coverage_html --html=tmp/pytest_report.html --self-contained-html)",
       "Bash(pytest scripts/test/test_camera.py::TestCameraFunctions::test_camera_status_query scripts/test/test_api.py::TestBackendAPI::test_missing_required_fields -v -s)",
       "Bash(tee tmp/test_full_run.log)",
-      "Bash(pytest scripts/test/test_camera.py scripts/test/test_api.py -v --cov=backend --cov-report=html:tmp/coverage_html --html=tmp/pytest_report.html --self-contained-html)"
+      "Bash(pytest scripts/test/test_camera.py scripts/test/test_api.py -v --cov=backend --cov-report=html:tmp/coverage_html --html=tmp/pytest_report.html --self-contained-html)",
+      "Bash(python -m pytest test/test_main_unit.py::TestDynamicCameraAPI test/test_main_unit.py::TestCameraSignalCallback -v --tb=short)",
+      "Bash(python -m pytest test/test_main_unit.py::TestDynamicCameraAPI test/test_main_unit.py::TestCameraSignalCallback -q)",
+      "Bash(dir \"n:\\\\yolo\\\\data\\\\screenshots\" /s /b)",
+      "Bash(findstr \".jpg\")"
     ]
   }
 }

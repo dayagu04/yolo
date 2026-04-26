@@ -5,6 +5,8 @@
 import time
 import asyncio
 import logging
+import json
+import uuid
 from typing import Optional, Dict, List
 from pathlib import Path
 import aiohttp
@@ -22,6 +24,7 @@ class FeishuNotifier:
         self.app_id = config.get("app_id", "")
         self.app_secret = config.get("app_secret", "")
         self.webhook_url = config.get("webhook_url", "")
+        self.receive_id_type = config.get("receive_id_type", "open_id")
         self.user_open_ids: List[str] = config.get("user_open_ids", [])
 
         # 推送控制
@@ -29,6 +32,8 @@ class FeishuNotifier:
         self.push_level = config.get("push_level", "high")
         self.include_screenshot = config.get("include_screenshot", True)
 
+        # 截图根目录（绝对路径，用于上传时拼接相对路径）
+        self._screenshots_root: Optional[Path] = None
         self._last_push_ts = 0.0
         self._tenant_token: Optional[str] = None
         self._token_expire_ts = 0.0
@@ -136,28 +141,42 @@ class FeishuNotifier:
             self.logger.error(f"获取飞书 token 异常: {e}")
             return None
 
-    async def _post_message(self, session: aiohttp.ClientSession, token: str, open_id: str, card: dict):
+    async def _post_message(self, session: aiohttp.ClientSession, token: str, receive_id: str, card: dict):
         """发送消息给指定用户（带重试）"""
         url = "https://open.feishu.cn/open-apis/im/v1/messages"
-        params = {"receive_id_type": "open_id"}
-        headers = {"Authorization": f"Bearer {token}"}
+        params = {"receive_id_type": self.receive_id_type}
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=utf-8",
+        }
+
+        content = json.dumps(card["card"], ensure_ascii=False)
         payload = {
-            "receive_id": open_id,
+            "receive_id": receive_id,
             "msg_type": "interactive",
-            "content": card["card"],
+            "content": content,
+            "uuid": str(uuid.uuid4()),
         }
 
         for attempt in range(1, 3):  # 最多重试 2 次
             try:
                 async with session.post(url, params=params, headers=headers, json=payload, timeout=10) as resp:
+                    text = await resp.text()
                     if resp.status == 200:
-                        self.logger.info(f"飞书直接消息推送成功: {open_id}")
-                        return
+                        try:
+                            data = json.loads(text)
+                        except Exception:
+                            data = {}
+
+                        if data.get("code") == 0:
+                            self.logger.info(f"飞书直接消息推送成功: {self.receive_id_type}={receive_id}")
+                            return
+
+                        self.logger.error(f"飞书直接消息推送失败 ({self.receive_id_type}={receive_id}, 尝试 {attempt}/2): {data}")
                     else:
-                        text = await resp.text()
-                        self.logger.error(f"飞书直接消息推送失败 ({open_id}, 尝试 {attempt}/2): {resp.status} {text}")
+                        self.logger.error(f"飞书直接消息推送失败 ({self.receive_id_type}={receive_id}, 尝试 {attempt}/2): {resp.status} {text}")
             except Exception as e:
-                self.logger.error(f"飞书直接消息推送异常 ({open_id}, 尝试 {attempt}/2): {e}")
+                self.logger.error(f"飞书直接消息推送异常 ({self.receive_id_type}={receive_id}, 尝试 {attempt}/2): {e}")
 
             if attempt < 2:
                 await asyncio.sleep(2 ** attempt)
@@ -207,14 +226,20 @@ class FeishuNotifier:
         return card
 
     async def _upload_image(self, image_path: str) -> Optional[str]:
-        """上传图片到飞书，返回 image_key"""
+        """上传图片到飞书，返回 image_key。
+        image_path 可以是绝对路径，也可以是相对于 _screenshots_root 的相对路径。
+        """
         token = await self._get_tenant_token()
         if not token:
             return None
 
         path = Path(image_path)
+        # 相对路径时，拼接截图根目录
+        if not path.is_absolute() and self._screenshots_root:
+            path = self._screenshots_root / path
+
         if not path.exists():
-            self.logger.warning(f"截图文件不存在: {image_path}")
+            self.logger.warning(f"截图文件不存在: {path}")
             return None
 
         try:
@@ -222,16 +247,18 @@ class FeishuNotifier:
             headers = {"Authorization": f"Bearer {token}"}
             form = aiohttp.FormData()
             form.add_field("image_type", "message")
-            form.add_field("image", open(path, "rb"), filename=path.name)
+            with open(path, "rb") as f:
+                form.add_field("image", f, filename=path.name, content_type="image/jpeg")
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, data=form, timeout=30) as resp:
-                    data = await resp.json()
-                    if data.get("code") == 0:
-                        return data["data"]["image_key"]
-                    else:
-                        self.logger.error(f"飞书图片上传失败: {data}")
-                        return None
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, headers=headers, data=form, timeout=30) as resp:
+                        data = await resp.json()
+                        if data.get("code") == 0:
+                            self.logger.info(f"飞书图片上传成功: {path.name}")
+                            return data["data"]["image_key"]
+                        else:
+                            self.logger.error(f"飞书图片上传失败: {data}")
+                            return None
         except Exception as e:
             self.logger.error(f"飞书图片上传异常: {e}")
             return None

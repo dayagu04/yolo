@@ -259,7 +259,143 @@ class TestMainRoutes:
 
 
 @pytest.mark.unit
-class TestCameraFactory:
+class TestDynamicCameraAPI:
+    """动态摄像头管理 API 测试（P2 补充）"""
+
+    @pytest.fixture
+    def mock_app_state(self):
+        with patch('backend.main.cameras', {}), \
+             patch('backend.main.config', {"cameras": [], "detection": {}, "alert": {}}), \
+             patch('backend.main.db_manager', None), \
+             patch('backend.main.redis_stats', None), \
+             patch('backend.main.START_TS', 1000.0):
+            yield
+
+    def test_list_cameras_with_config(self):
+        """GET /api/cameras 返回配置中的摄像头，id 字段存在"""
+        from backend.main import app
+        from fastapi.testclient import TestClient
+
+        cam_cfg = [{"id": 0, "name": "测试", "location": "A", "source": 0}]
+        mock_cam = Mock()
+        mock_cam.get_status.return_value = {
+            "camera_id": 0, "connected": True, "running": True,
+            "model_loaded": False, "fps": 25.0, "active_tracks": 0,
+        }
+
+        with patch('backend.main.config', {"cameras": cam_cfg}), \
+             patch('backend.main.cameras', {0: mock_cam}):
+            client = TestClient(app)
+            resp = client.get("/api/cameras")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        cam = data["cameras"][0]
+        # 前端依赖 id 字段，不能是 camera_id
+        assert cam["id"] == 0
+        assert cam["name"] == "测试"
+
+    def test_add_camera_missing_source(self, mock_app_state):
+        """POST /api/cameras/{id}/add 缺少 source 返回 422"""
+        from backend.main import app
+        from fastapi.testclient import TestClient
+
+        client = TestClient(app)
+        resp = client.post("/api/cameras/5/add", json={"name": "新摄像头"})
+        assert resp.status_code == 422
+
+    def test_add_camera_duplicate(self, mock_app_state):
+        """POST /api/cameras/{id}/add 重复添加返回 409"""
+        from backend.main import app, cameras
+        from fastapi.testclient import TestClient
+
+        cameras[5] = Mock()
+        client = TestClient(app)
+        resp = client.post("/api/cameras/5/add", json={"source": 0})
+        assert resp.status_code == 409
+
+    def test_add_camera_invalid_json(self, mock_app_state):
+        """POST /api/cameras/{id}/add 非法 JSON 返回 422"""
+        from backend.main import app
+        from fastapi.testclient import TestClient
+
+        client = TestClient(app)
+        resp = client.post(
+            "/api/cameras/5/add",
+            data="not-json",
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 422
+
+    def test_remove_camera_not_found(self, mock_app_state):
+        """POST /api/cameras/{id}/remove 不存在返回 404"""
+        from backend.main import app
+        from fastapi.testclient import TestClient
+
+        client = TestClient(app)
+        resp = client.post("/api/cameras/99/remove")
+        assert resp.status_code == 404
+
+    def test_remove_camera_success(self, mock_app_state):
+        """POST /api/cameras/{id}/remove 成功移除"""
+        from backend.main import app, cameras
+        from fastapi.testclient import TestClient
+
+        mock_cam = Mock()
+        cameras[3] = mock_cam
+
+        with patch('backend.main.structured_logger') as mock_log, \
+             patch('backend.main._dispatch_signal'):
+            mock_log.log.return_value = {}
+            client = TestClient(app)
+            resp = client.post("/api/cameras/3/remove")
+
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        assert 3 not in cameras
+        mock_cam.stop.assert_called_once()
+
+
+@pytest.mark.unit
+class TestCameraSignalCallback:
+    """_camera_signal_callback 线程安全测试（P1 修复验证）"""
+
+    def test_feishu_uses_call_soon_threadsafe(self):
+        """飞书推送通过 call_soon_threadsafe 调度，不直接调用 create_task"""
+        from backend.main import _camera_signal_callback
+
+        mock_loop = Mock()
+        mock_notifier = AsyncMock()
+
+        alert_msg = {"type": "alert", "level": "high", "data": {"screenshot_path": None}}
+
+        with patch('backend.main._event_loop', mock_loop), \
+             patch('backend.main.feishu_notifier', mock_notifier), \
+             patch('backend.main._dispatch_signal'):
+            mock_loop.is_running.return_value = True
+            _camera_signal_callback(alert_msg)
+
+        # 至少调用一次，且参数中包含 notifier.send_alert 生成的协程
+        assert mock_loop.call_soon_threadsafe.call_count >= 1
+        called_args = [c.args for c in mock_loop.call_soon_threadsafe.call_args_list]
+        assert any(len(args) >= 2 for args in called_args)
+
+    def test_no_feishu_no_threadsafe_call(self):
+        """无飞书 notifier 时不调用 call_soon_threadsafe"""
+        from backend.main import _camera_signal_callback
+
+        mock_loop = Mock()
+        alert_msg = {"type": "alert", "level": "high", "data": {}}
+
+        with patch('backend.main._event_loop', mock_loop), \
+             patch('backend.main.feishu_notifier', None), \
+             patch('backend.main._dispatch_signal'):
+            _camera_signal_callback(alert_msg)
+
+        # feishu_notifier 为 None，不应触发 call_soon_threadsafe
+        mock_loop.call_soon_threadsafe.assert_not_called()
+
     """摄像头工厂函数测试"""
 
     def test_get_camera_creates_new(self):
