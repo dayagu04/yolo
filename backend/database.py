@@ -3,12 +3,12 @@
 提供告警记录的持久化存储
 """
 from sqlalchemy import (
-    create_engine, Column, Integer, String, DateTime, Text, Enum, JSON, TIMESTAMP, text
+    create_engine, Column, Integer, String, DateTime, Text, Enum, JSON, TIMESTAMP, text, func
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict
 from contextlib import contextmanager
 import logging
@@ -28,7 +28,7 @@ class Alert(Base):
     screenshot_path = Column(String(512))
     message = Column(String(512))
     level = Column(Enum("low", "medium", "high"), default="high", index=True)
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> dict:
         return {
@@ -53,7 +53,7 @@ class Camera(Base):
     status = Column(Enum("online", "offline", "error"), default="offline")
     last_seen = Column(DateTime)
     resolution = Column(String(20))
-    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc))
 
 
 class DatabaseManager:

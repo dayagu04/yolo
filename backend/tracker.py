@@ -37,7 +37,7 @@ class PersonTracker:
         for box in boxes:
             bx_c = (box[0] + box[2]) / 2
             by_c = (box[1] + box[3]) / 2
-            best_id, best_iou = None, 0.0
+            best_id, best_score = None, -1.0
 
             for tid, track in self._tracks.items():
                 if tid in matched:
@@ -45,8 +45,15 @@ class PersonTracker:
                 iou = self._iou(box, track["bbox"])
                 tc = track["center"]
                 dist = ((bx_c - tc[0]) ** 2 + (by_c - tc[1]) ** 2) ** 0.5
-                if (iou > 0.3 or dist < 50.0) and iou > best_iou:
-                    best_iou = iou
+                # 优先 IoU，IoU 为 0 时用距离倒数作为备用分数
+                if iou > 0.3:
+                    score = iou
+                elif dist < 50.0:
+                    score = dist / -100.0  # 负值，低于任何 IoU 匹配，但高于 -1
+                else:
+                    continue
+                if score > best_score:
+                    best_score = score
                     best_id = tid
 
             if best_id is None:

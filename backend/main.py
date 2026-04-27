@@ -423,7 +423,7 @@ async def health():
         "camera_count": len(cameras),
         "subsystems": {
             "database": "ok" if db_ok else ("disabled" if db_manager is None else "error"),
-            "redis": "ok" if redis_ok else ("disabled" if not (redis_stats and redis_stats.enabled) else "error"),
+            "redis": "ok" if redis_ok else ("disabled" if not (redis_stats and redis_stats.is_enabled()) else "error"),
             "model": "ok" if model_ok else ("not_loaded" if camera_stats else "no_camera"),
         },
         "cameras": camera_stats,

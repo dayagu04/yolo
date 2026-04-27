@@ -68,12 +68,17 @@ class FeishuNotifier:
 
         self._last_push_ts = now
 
+        # 提前上传截图，避免 webhook + 直接消息各自上传一次
+        image_key: Optional[str] = None
+        if self.include_screenshot and screenshot_path and self.app_id:
+            image_key = await self._upload_image(screenshot_path)
+
         # 并发发送群消息和直接消息
         tasks = []
         if self.webhook_url:
-            tasks.append(self._send_webhook(alert, screenshot_path))
+            tasks.append(self._send_webhook(alert, image_key))
         if self.app_id and self.user_open_ids:
-            tasks.append(self._send_direct_messages(alert, screenshot_path))
+            tasks.append(self._send_direct_messages(alert, image_key))
 
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -86,9 +91,9 @@ class FeishuNotifier:
         level_priority = {"low": 1, "medium": 2, "high": 3}
         return level_priority.get(alert_level, 3) >= level_priority.get(self.push_level, 3)
 
-    async def _send_webhook(self, alert: dict, screenshot_path: Optional[str]):
+    async def _send_webhook(self, alert: dict, image_key: Optional[str]):
         """发送群机器人 Webhook 消息（带重试）"""
-        card = await self._build_card(alert, screenshot_path)
+        card = self._build_card(alert, image_key)
 
         for attempt in range(1, 3):  # 最多重试 2 次
             try:
@@ -106,14 +111,14 @@ class FeishuNotifier:
             if attempt < 2:
                 await asyncio.sleep(2 ** attempt)  # 指数退避: 2s, 4s
 
-    async def _send_direct_messages(self, alert: dict, screenshot_path: Optional[str]):
+    async def _send_direct_messages(self, alert: dict, image_key: Optional[str]):
         """发送直接消息给指定用户"""
         try:
             token = await self._get_tenant_token()
             if not token:
                 return
 
-            card = await self._build_card(alert, screenshot_path)
+            card = self._build_card(alert, image_key)
             async with aiohttp.ClientSession() as session:
                 for open_id in self.user_open_ids:
                     await self._post_message(session, token, open_id, card)
@@ -131,7 +136,7 @@ class FeishuNotifier:
             payload = {"app_id": self.app_id, "app_secret": self.app_secret}
 
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload, timeout=10) as resp:
+                async with session.post(url, json=payload, timeout=_TIMEOUT_SHORT) as resp:
                     data = await resp.json()
                     if data.get("code") == 0:
                         self._tenant_token = data["tenant_access_token"]
@@ -163,7 +168,7 @@ class FeishuNotifier:
 
         for attempt in range(1, 3):  # 最多重试 2 次
             try:
-                async with session.post(url, params=params, headers=headers, json=payload, timeout=10) as resp:
+                async with session.post(url, params=params, headers=headers, json=payload, timeout=_TIMEOUT_SHORT) as resp:
                     text = await resp.text()
                     if resp.status == 200:
                         try:
@@ -184,7 +189,7 @@ class FeishuNotifier:
             if attempt < 2:
                 await asyncio.sleep(2 ** attempt)
 
-    async def _build_card(self, alert: dict, screenshot_path: Optional[str]) -> dict:
+    def _build_card(self, alert: dict, image_key: Optional[str]) -> dict:
         """构建飞书卡片消息"""
         data = alert.get("data", {})
         camera_id = alert.get("camera_id", 0)
@@ -216,15 +221,13 @@ class FeishuNotifier:
             },
         }
 
-        # 截图上传
-        if self.include_screenshot and screenshot_path:
-            image_key = await self._upload_image(screenshot_path)
-            if image_key:
-                card["card"]["elements"].append({
-                    "tag": "img",
-                    "img_key": image_key,
-                    "alt": {"tag": "plain_text", "content": "告警截图"}
-                })
+        # 附加截图（image_key 已在 send_alert 层上传）
+        if self.include_screenshot and image_key:
+            card["card"]["elements"].append({
+                "tag": "img",
+                "img_key": image_key,
+                "alt": {"tag": "plain_text", "content": "告警截图"}
+            })
 
         return card
 
@@ -248,20 +251,20 @@ class FeishuNotifier:
         try:
             url = "https://open.feishu.cn/open-apis/im/v1/images"
             headers = {"Authorization": f"Bearer {token}"}
+            image_bytes = path.read_bytes()
             form = aiohttp.FormData()
             form.add_field("image_type", "message")
-            with open(path, "rb") as f:
-                form.add_field("image", f, filename=path.name, content_type="image/jpeg")
+            form.add_field("image", image_bytes, filename=path.name, content_type="image/jpeg")
 
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(url, headers=headers, data=form, timeout=30) as resp:
-                        data = await resp.json()
-                        if data.get("code") == 0:
-                            self.logger.info(f"飞书图片上传成功: {path.name}")
-                            return data["data"]["image_key"]
-                        else:
-                            self.logger.error(f"飞书图片上传失败: {data}")
-                            return None
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, data=form, timeout=_TIMEOUT_UPLOAD) as resp:
+                    data = await resp.json()
+                    if data.get("code") == 0:
+                        self.logger.info(f"飞书图片上传成功: {path.name}")
+                        return data["data"]["image_key"]
+                    else:
+                        self.logger.error(f"飞书图片上传失败: {data}")
+                        return None
         except Exception as e:
             self.logger.error(f"飞书图片上传异常: {e}")
             return None
