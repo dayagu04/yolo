@@ -3,7 +3,7 @@
 提供告警记录的持久化存储
 """
 from sqlalchemy import (
-    create_engine, Column, Integer, String, DateTime, Text, Enum, JSON, TIMESTAMP, text, func
+    create_engine, Column, Integer, String, DateTime, Text, Enum, JSON, TIMESTAMP, Boolean, text, func
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
@@ -54,6 +54,21 @@ class Camera(Base):
     last_seen = Column(DateTime)
     resolution = Column(String(20))
     created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc))
+
+
+class User(Base):
+    """用户表"""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(50), unique=True, nullable=False, index=True)
+    hashed_password = Column(String(255), nullable=False)
+    role = Column(Enum("admin", "operator", "viewer"), default="viewer", nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "username": self.username, "role": self.role, "is_active": self.is_active}
 
 
 class DatabaseManager:
@@ -199,4 +214,25 @@ class DatabaseManager:
             camera.last_seen = datetime.now()
             if resolution:
                 camera.resolution = resolution
+
+    # ------------------------------------------------------------------ #
+    #  用户 CRUD
+    # ------------------------------------------------------------------ #
+
+    def get_user_by_username(self, username: str) -> Optional[dict]:
+        with self._session() as session:
+            user = session.query(User).filter(User.username == username).first()
+            return user.to_dict() | {"hashed_password": user.hashed_password} if user else None
+
+    def create_user(self, username: str, hashed_password: str, role: str = "viewer") -> dict:
+        with self._session() as session:
+            user = User(username=username, hashed_password=hashed_password, role=role)
+            session.add(user)
+            session.flush()
+            return user.to_dict()
+
+    def user_exists(self) -> bool:
+        """检查是否存在任意用户（用于首次启动初始化判断）。"""
+        with self._session() as session:
+            return session.query(User).count() > 0
 

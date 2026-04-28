@@ -1,13 +1,14 @@
 智能视频监控 MVP 阶段：前后端详细设计文档
 
 ## 版本说明
-- **文档版本：** v1.6
-- **最后更新：** 2026-04-26
+- **文档版本：** v1.7
+- **最后更新：** 2026-04-28
 - **实现状态：** 本文档为系统设计的 Source of Truth，代码实现需与此文档保持一致
 - **v1.3 更新：** 新增 MySQL 告警存储、截图保存、Redis 实时统计、告警历史查询 API
 - **v1.4 更新（P0 稳定性）：** FastAPI lifespan 生命周期、健康检查细化、配置校验、截图定时清理、异常处理统一化
 - **v1.5 更新（多摄像头/飞书/稳定性）：** 新增动态摄像头管理 API、飞书线程安全调度、`CONFIG_FILE` 启动配置切换、统计口径对齐
 - **v1.6 更新（模块拆分/接口修正）：** `CameraManager` 拆分为 `PersonTracker` + `ScreenshotManager` 两个独立子模块；同步截图路径命名规则、`get_status` 新增 `resolution` 字段、`/health` 返回补充 `subsystems` 与 `timestamp`、配置范围校验新增飞书冷却项、接口编号去重、前端日志上限与心跳间隔对齐代码
+- **v1.7 更新（安全加固 + 容器化部署）：** 新增 JWT 身份认证、用户管理、API 访问控制、CORS 配置；新增 Docker 容器化、Nginx 反向代理、`.env` 敏感配置隔离；新增接口十一（登录）、接口十二（用户信息）；前端新增登录页面逻辑
 
 ---
 
@@ -428,3 +429,218 @@
 - **用途：** 无需真实摄像头和 YOLO 模型，独立运行前端 UI 预览
 - **启动：** `python test/mock_server.py`
 - **特性：** 随机生成告警事件（每 8~20 秒触发一次），模拟视频流
+
+---
+
+## 5. 安全设计 (Security Design)
+
+### 5.1 认证方案：JWT Bearer Token
+
+#### 设计决策
+- 采用 **JWT（JSON Web Token）** 无状态认证，适合前后端分离架构
+- 不使用 Session/Cookie，避免 CSRF 风险，且对 WebSocket 友好
+- Token 存储在前端 `localStorage`，每次请求通过 `Authorization: Bearer <token>` 头携带
+- WebSocket 连接通过 URL 查询参数 `?token=<token>` 传递（浏览器 WS API 不支持自定义 Header）
+
+#### Token 规则
+| 字段 | 说明 |
+|------|------|
+| 算法 | HS256 |
+| 有效期 | `auth.access_token_expire_minutes`（默认 60 分钟） |
+| Payload | `sub`（用户名）、`role`（角色）、`exp`（过期时间） |
+| 密钥来源 | 环境变量 `YOLO_AUTH_SECRET_KEY`，不得写入配置文件 |
+
+#### 接口访问控制矩阵
+| 接口 | 匿名 | viewer | operator | admin |
+|------|------|--------|----------|-------|
+| `POST /api/auth/login` | ✅ | ✅ | ✅ | ✅ |
+| `GET /health` | ✅ | ✅ | ✅ | ✅ |
+| `GET /video_feed` | ❌ | ✅ | ✅ | ✅ |
+| `WS /ws/alert` | ❌ | ✅ | ✅ | ✅ |
+| `GET /api/cameras` | ❌ | ✅ | ✅ | ✅ |
+| `GET /api/alerts` | ❌ | ✅ | ✅ | ✅ |
+| `GET /api/logs` | ❌ | ✅ | ✅ | ✅ |
+| `GET /api/stats` | ❌ | ✅ | ✅ | ✅ |
+| `POST /api/camera/{id}/config` | ❌ | ❌ | ✅ | ✅ |
+| `POST /api/cameras/{id}/add` | ❌ | ❌ | ✅ | ✅ |
+| `POST /api/cameras/{id}/remove` | ❌ | ❌ | ❌ | ✅ |
+| `POST /api/cleanup` | ❌ | ❌ | ❌ | ✅ |
+| `GET /api/auth/me` | ❌ | ✅ | ✅ | ✅ |
+
+#### 角色定义
+- `viewer`：只读，可查看视频流、告警历史、统计
+- `operator`：可调整检测配置、添加摄像头
+- `admin`：全权限，包括删除摄像头、手动清理
+
+### 5.2 用户存储
+
+用户信息存储在 MySQL `users` 表，密码使用 **bcrypt** 哈希（cost factor 12）。
+
+```sql
+CREATE TABLE users (
+    id       INT PRIMARY KEY AUTO_INCREMENT,
+    username VARCHAR(50) UNIQUE NOT NULL,
+    hashed_password VARCHAR(255) NOT NULL,
+    role     ENUM('admin','operator','viewer') DEFAULT 'viewer',
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+初始管理员账号通过 `scripts/init_database.py` 或环境变量 `YOLO_AUTH_INIT_ADMIN_PASSWORD` 在首次启动时自动创建（用户名固定为 `admin`）。
+
+### 5.3 新增 API 接口
+
+#### 接口十一：用户登录
+- **路径：** `POST /api/auth/login`
+- **认证：** 无需 Token（公开接口）
+- **请求体：**
+```json
+{ "username": "admin", "password": "your_password" }
+```
+- **成功响应（200）：**
+```json
+{
+  "access_token": "eyJhbGci...",
+  "token_type": "bearer",
+  "expires_in": 3600,
+  "role": "admin"
+}
+```
+- **失败响应（401）：** `{"detail": "用户名或密码错误"}`
+- **限流：** 同一 IP 每分钟最多 10 次登录尝试（防暴力破解）
+
+#### 接口十二：获取当前用户信息
+- **路径：** `GET /api/auth/me`
+- **认证：** 需要有效 Token
+- **成功响应（200）：**
+```json
+{ "username": "admin", "role": "admin" }
+```
+
+### 5.4 CORS 配置
+- 允许来源：`auth.cors_origins` 配置列表（生产环境只填实际域名）
+- 允许方法：`GET, POST, OPTIONS`
+- 允许 Header：`Authorization, Content-Type`
+- 不允许通配符 `*`（生产环境）
+
+### 5.5 敏感信息保护规则
+- **绝对不上传 git 的文件：**
+  - `.env`（所有密钥、密码）
+  - `config.secrets.yaml`（飞书 AppSecret 等）
+  - `nginx/ssl/`（SSL 证书私钥）
+- **必须通过环境变量注入的值：**
+  - `YOLO_AUTH_SECRET_KEY`：JWT 签名密钥（生产环境必须 32 字节以上随机字符串）
+  - `YOLO_DATABASE_PASSWORD`：数据库密码
+  - `YOLO_AUTH_INIT_ADMIN_PASSWORD`：初始管理员密码（首次启动后可删除）
+- **`.env.example` 作为模板提交 git**，不含真实值，仅说明需要填写的变量
+
+---
+
+## 6. 部署架构 (Deployment Architecture)
+
+### 6.1 整体拓扑
+
+```
+Internet
+    │
+    ▼
+[Nginx :443]  ← SSL 终止、静态文件、反向代理
+    │
+    ├── /              → 静态文件（主页 index.html）
+    ├── /surveillance  → 监控前端（yolo/frontend/index.html）
+    ├── /api/*         → FastAPI 后端 :8000
+    ├── /ws/*          → FastAPI WebSocket :8000（Upgrade）
+    └── /video_feed    → FastAPI MJPEG 流 :8000（关闭缓冲）
+    │
+    ▼
+[FastAPI :8000]  ← uvicorn，仅监听 127.0.0.1（不对外暴露）
+    │
+    ├── MySQL :3306
+    └── Redis :6379（可选）
+```
+
+### 6.2 目录结构（新增部署相关文件）
+
+```
+yolo/
+├── Dockerfile
+├── docker-compose.yml
+├── .env.example          # 环境变量模板（提交 git）
+├── .env                  # 真实密钥（不提交 git）
+├── nginx/
+│   ├── nginx.conf        # Nginx 主配置
+│   └── ssl/              # SSL 证书（不提交 git）
+│       ├── cert.pem
+│       └── key.pem
+├── backend/
+│   ├── auth.py           # JWT 认证模块（新增）
+│   └── ...
+└── ...
+```
+
+### 6.3 Docker Compose 服务编排
+
+| 服务 | 镜像 | 端口（内部） | 说明 |
+|------|------|-------------|------|
+| `backend` | 本地构建 | 8000 | FastAPI + uvicorn，仅 127.0.0.1 |
+| `mysql` | mysql:8.0 | 3306 | 数据持久化，volume 挂载 |
+| `redis` | redis:7-alpine | 6379 | 可选，实时统计 |
+| `nginx` | nginx:alpine | 80, 443 | 对外唯一入口 |
+
+- 所有服务通过 `yolo_network` 内部网络通信，只有 Nginx 暴露 80/443
+- `backend` 绑定 `127.0.0.1:8000`，不对宿主机其他网卡暴露
+
+### 6.4 Nginx 关键配置说明
+
+- **HTTPS 强制跳转：** 80 端口全部 301 重定向到 443
+- **WSS 代理：** `/ws/` 路径设置 `Upgrade` 和 `Connection` 头，`proxy_read_timeout 86400`
+- **MJPEG 流代理：** `/video_feed` 关闭 `proxy_buffering`，设置 `chunked_transfer_encoding on`
+- **主页路由：** `/` 服务 `n:/index/index.html`；`/surveillance` 服务 `yolo/frontend/index.html`
+- **安全头：** 添加 `X-Frame-Options DENY`、`X-Content-Type-Options nosniff`、`Strict-Transport-Security`
+
+### 6.5 config.yaml 新增 auth 节
+
+```yaml
+# ============================================================
+# 认证配置
+# ============================================================
+auth:
+  access_token_expire_minutes: 60   # Token 有效期（分钟）
+  cors_origins:                      # 允许的跨域来源
+    - "https://gudaya.chat"
+    - "http://localhost:8000"        # 本地开发
+  # secret_key 必须通过环境变量 YOLO_AUTH_SECRET_KEY 注入，不在此配置
+  init_admin_username: "admin"       # 初始管理员用户名
+  # init_admin_password 通过环境变量 YOLO_AUTH_INIT_ADMIN_PASSWORD 注入
+```
+
+### 6.6 前端登录流程
+
+1. 前端检测 `localStorage` 中是否存在有效 Token（解析 JWT exp 字段判断是否过期）
+2. 无 Token 或已过期 → 显示登录弹窗（覆盖层，不跳转页面）
+3. 用户提交用户名/密码 → `POST /api/auth/login`
+4. 登录成功 → 将 `access_token` 存入 `localStorage`，隐藏弹窗，初始化 WS 和摄像头列表
+5. 所有 `fetch` 请求自动附加 `Authorization: Bearer <token>` 头
+6. WebSocket 连接 URL 附加 `?token=<token>`
+7. 收到 401 响应 → 清除 Token，重新显示登录弹窗
+
+---
+
+## 7. 实现文件清单 (Implementation Checklist)
+
+| 文件 | 变更类型 | 说明 |
+|------|----------|------|
+| `backend/auth.py` | 新增 | JWT 工具函数、用户验证、依赖注入 |
+| `backend/database.py` | 修改 | 新增 `User` 表模型、用户 CRUD |
+| `backend/main.py` | 修改 | 接入认证依赖、CORS、登录接口 |
+| `backend/schemas.py` | 修改 | 新增 `LoginRequest`、`TokenResponse` |
+| `backend/config.py` | 修改 | 新增 `auth` 节校验 |
+| `config.yaml` | 修改 | 新增 `auth` 配置节 |
+| `frontend/index.html` | 修改 | 新增登录弹窗、Token 管理、请求拦截 |
+| `.env.example` | 新增 | 环境变量模板 |
+| `.gitignore` | 修改 | 新增 `.env`、`nginx/ssl/` 保护 |
+| `Dockerfile` | 新增 | 多阶段构建 |
+| `docker-compose.yml` | 新增 | 服务编排 |
+| `nginx/nginx.conf` | 新增 | 反向代理配置 |
+| `requirements.txt` | 修改 | 新增 `python-jose`、`passlib[bcrypt]`、`slowapi` |

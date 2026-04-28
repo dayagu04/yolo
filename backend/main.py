@@ -1,4 +1,5 @@
 import asyncio
+import os
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -10,17 +11,22 @@ ROOT = Path(__file__).parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, Request, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse
 import uvicorn
 
 from backend.camera import CameraManager
 from backend.config import load_and_validate_config, ConfigError
 from backend.logging_system import structured_logger
-from backend.schemas import DetectionConfig
+from backend.schemas import DetectionConfig, LoginRequest, TokenResponse, UserInfo
 from backend.database import DatabaseManager
 from backend.redis_stats import RedisStats
 from backend.notifier import FeishuNotifier
+from backend.auth import (
+    hash_password, verify_password, create_access_token,
+    get_current_user, require_operator, require_admin,
+)
 
 # ------------------------------------------------------------------ #
 #  全局状态
@@ -118,7 +124,6 @@ async def lifespan(app: FastAPI):
 
     # ── 启动阶段 ──
     # 1. 加载并校验配置（支持环境变量指定配置文件）
-    import os
     config_file = os.environ.get("CONFIG_FILE", "config.yaml")
     try:
         config = load_and_validate_config(ROOT / config_file)
@@ -136,6 +141,8 @@ async def lifespan(app: FastAPI):
             db_manager = DatabaseManager(config["database"])
             db_manager.create_tables()
             print("数据库连接成功")
+            # 首次启动：若无任何用户，自动创建 admin
+            _init_admin(db_manager, config)
         except Exception as e:
             print(f"[WARN] 数据库连接失败（告警将不持久化）: {e}")
             db_manager = None
@@ -203,6 +210,29 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="智能视频监控", lifespan=lifespan)
+
+# CORS：允许来源从配置读取，默认只允许本地开发
+_cors_origins = ["http://localhost:8000", "http://127.0.0.1:8000"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+
+def _init_admin(db: DatabaseManager, cfg: dict):
+    """首次启动时若无用户则创建 admin 账号。"""
+    if db.user_exists():
+        return
+    init_pwd = os.environ.get("YOLO_AUTH_INIT_ADMIN_PASSWORD", "")
+    username = cfg.get("auth", {}).get("init_admin_username", "admin")
+    if not init_pwd:
+        print("[WARN] 未设置 YOLO_AUTH_INIT_ADMIN_PASSWORD，跳过 admin 初始化")
+        return
+    db.create_user(username, hash_password(init_pwd), role="admin")
+    print(f"[INFO] 初始管理员账号已创建: {username}")
 
 
 # ------------------------------------------------------------------ #
@@ -306,11 +336,51 @@ def get_camera(camera_id: int = 0, cam_cfg: Optional[dict] = None) -> CameraMana
 
 
 # ------------------------------------------------------------------ #
+#  认证接口
+# ------------------------------------------------------------------ #
+
+@app.post("/api/auth/login", response_model=TokenResponse)
+async def login(req: LoginRequest):
+    if not db_manager:
+        raise HTTPException(status_code=503, detail="数据库未配置")
+    user = db_manager.get_user_by_username(req.username)
+    if not user or not verify_password(req.password, user["hashed_password"]):
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    if not user.get("is_active"):
+        raise HTTPException(status_code=403, detail="账号已禁用")
+
+    expire_min = config.get("auth", {}).get("access_token_expire_minutes", 60)
+    token = create_access_token(user["username"], user["role"], expire_minutes=expire_min)
+    return TokenResponse(
+        access_token=token,
+        expires_in=expire_min * 60,
+        role=user["role"],
+    )
+
+
+@app.get("/api/auth/me", response_model=UserInfo)
+async def get_me(user: dict = Depends(get_current_user)):
+    return UserInfo(username=user["sub"], role=user["role"])
+
+
+# ------------------------------------------------------------------ #
 #  WebSocket /ws/alert
 # ------------------------------------------------------------------ #
 
 @app.websocket("/ws/alert")
 async def websocket_alert(websocket: WebSocket):
+    # WebSocket 通过 ?token= 查询参数认证
+    token = websocket.query_params.get("token", "")
+    if not token:
+        await websocket.close(code=4001)
+        return
+    try:
+        from backend.auth import decode_token
+        decode_token(token)
+    except Exception:
+        await websocket.close(code=4001)
+        return
+
     await websocket.accept()
     _ws_clients.append(websocket)
     entry = structured_logger.log(
@@ -343,7 +413,7 @@ async def websocket_alert(websocket: WebSocket):
 # ------------------------------------------------------------------ #
 
 @app.get("/video_feed")
-async def video_feed(camera_id: int = 0):
+async def video_feed(camera_id: int = 0, _user: dict = Depends(get_current_user)):
     camera = get_camera(camera_id)
     return StreamingResponse(
         camera.get_frame_generator(),
@@ -356,7 +426,7 @@ async def video_feed(camera_id: int = 0):
 # ------------------------------------------------------------------ #
 
 @app.post("/api/camera/{camera_id}/config")
-async def update_config(camera_id: int, cfg: DetectionConfig):
+async def update_config(camera_id: int, cfg: DetectionConfig, _user: dict = Depends(require_operator)):
     camera = get_camera(camera_id)
     if cfg.enabled is not None:
         camera.toggle_detection(cfg.enabled)
@@ -372,7 +442,7 @@ async def update_config(camera_id: int, cfg: DetectionConfig):
 
 
 @app.get("/api/camera/{camera_id}/status")
-async def camera_status(camera_id: int):
+async def camera_status(camera_id: int, _user: dict = Depends(get_current_user)):
     return get_camera(camera_id).get_status()
 
 
@@ -381,7 +451,7 @@ async def camera_status(camera_id: int):
 # ------------------------------------------------------------------ #
 
 @app.get("/api/logs")
-async def get_logs(limit: int = Query(100, ge=1, le=500)):
+async def get_logs(limit: int = Query(100, ge=1, le=500), _user: dict = Depends(get_current_user)):
     logs = structured_logger.get_recent_logs(limit)
     return {"count": len(logs), "logs": logs}
 
@@ -443,6 +513,7 @@ async def get_alerts(
     end_time: Optional[str] = Query(None),
     level: Optional[str] = Query(None),
     order: str = Query("desc", pattern="^(asc|desc)$"),
+    _user: dict = Depends(get_current_user),
 ):
     if not db_manager:
         raise HTTPException(status_code=503, detail="数据库未配置")
@@ -463,7 +534,7 @@ async def get_alerts(
 
 
 @app.get("/api/alerts/{alert_id}/screenshot")
-async def get_alert_screenshot(alert_id: int):
+async def get_alert_screenshot(alert_id: int, _user: dict = Depends(get_current_user)):
     if not db_manager:
         raise HTTPException(status_code=503, detail="数据库未配置")
     try:
@@ -490,7 +561,7 @@ async def get_alert_screenshot(alert_id: int):
 # ------------------------------------------------------------------ #
 
 @app.post("/api/cleanup")
-async def manual_cleanup():
+async def manual_cleanup(_user: dict = Depends(require_admin)):
     """手动触发截图和数据库清理（测试用）"""
     if not config:
         raise HTTPException(status_code=503, detail="配置未加载")
@@ -523,7 +594,7 @@ async def manual_cleanup():
 # ------------------------------------------------------------------ #
 
 @app.get("/api/stats")
-async def get_stats():
+async def get_stats(_user: dict = Depends(get_current_user)):
     if not redis_stats or not redis_stats.is_enabled():
         return JSONResponse(status_code=503, content={"error": "Redis 统计功能未启用"})
     try:
@@ -537,7 +608,7 @@ async def get_stats():
 # ------------------------------------------------------------------ #
 
 @app.get("/api/cameras")
-async def list_cameras():
+async def list_cameras(_user: dict = Depends(get_current_user)):
     cameras_cfg = config.get("cameras", [])
     result = []
     for cam_cfg in cameras_cfg:
@@ -560,7 +631,7 @@ async def list_cameras():
 
 
 @app.post("/api/cameras/{camera_id}/add")
-async def add_camera(camera_id: int, request: Request):
+async def add_camera(camera_id: int, request: Request, _user: dict = Depends(require_operator)):
     if camera_id in cameras:
         raise HTTPException(status_code=409, detail=f"摄像头 {camera_id} 已存在")
 
@@ -603,7 +674,7 @@ async def add_camera(camera_id: int, request: Request):
 
 
 @app.post("/api/cameras/{camera_id}/remove")
-async def remove_camera(camera_id: int):
+async def remove_camera(camera_id: int, _user: dict = Depends(require_admin)):
     if camera_id not in cameras:
         raise HTTPException(status_code=404, detail=f"摄像头 {camera_id} 不存在")
 

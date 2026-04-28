@@ -1,7 +1,8 @@
 """
 数据库初始化脚本
-创建 MySQL 数据库和表结构
+创建 MySQL 数据库、表结构，并写入初始管理员账号
 """
+import os
 import sys
 from pathlib import Path
 
@@ -16,7 +17,14 @@ from sqlalchemy import create_engine, text
 def load_config():
     config_path = ROOT / "config.yaml"
     with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+
+    # 从环境变量注入数据库密码
+    db_password = os.environ.get("YOLO_DATABASE_PASSWORD", "")
+    if db_password:
+        cfg["database"]["password"] = db_password
+
+    return cfg
 
 
 def create_database(config: dict):
@@ -62,6 +70,34 @@ def init_tables(config: dict):
     db_manager = DatabaseManager(config["database"])
     db_manager.create_tables()
     print("✓ 表结构初始化完成")
+    return db_manager
+
+
+def create_admin_user(db_manager: DatabaseManager, config: dict):
+    """创建初始管理员账号"""
+    print("\n创建管理员账号...")
+
+    # 检查是否已有用户
+    if db_manager.user_exists():
+        print("✓ 用户表已有数据，跳过管理员创建")
+        return
+
+    # 从配置和环境变量获取管理员信息
+    username = config.get("auth", {}).get("init_admin_username", "admin")
+    password = os.environ.get("YOLO_AUTH_INIT_ADMIN_PASSWORD", "")
+
+    if not password:
+        print("⚠ 未设置环境变量 YOLO_AUTH_INIT_ADMIN_PASSWORD，跳过管理员创建")
+        print("  请在 .env 文件中设置该变量后重新运行")
+        return
+
+    # 导入认证模块并创建用户
+    from backend.auth import hash_password
+    hashed_pwd = hash_password(password)
+    db_manager.create_user(username, hashed_pwd, role="admin")
+    print(f"✓ 管理员账号已创建: {username}")
+    print(f"  角色: admin")
+    print(f"  密码: {'*' * len(password)}")
 
 
 def main():
@@ -71,7 +107,7 @@ def main():
 
     try:
         # 加载配置
-        print("\n[1/3] 加载配置文件...")
+        print("\n[1/4] 加载配置文件...")
         config = load_config()
         db_config = config.get("database")
 
@@ -85,18 +121,22 @@ def main():
         print(f"  - 数据库: {db_config['database']}")
 
         # 创建数据库
-        print("\n[2/3] 创建数据库...")
+        print("\n[2/4] 创建数据库...")
         create_database(config)
 
         # 初始化表
-        print("\n[3/3] 初始化表结构...")
-        init_tables(config)
+        print("\n[3/4] 初始化表结构...")
+        db_manager = init_tables(config)
+
+        # 创建管理员账号
+        print("\n[4/4] 创建管理员账号...")
+        create_admin_user(db_manager, config)
 
         print("\n" + "=" * 60)
         print("  ✓ 数据库初始化完成")
         print("=" * 60)
         print("\n可以使用以下命令启动服务:")
-        print("  python backend/main.py")
+        print("  uvicorn backend.main:app --host 0.0.0.0 --port 9000")
 
     except FileNotFoundError:
         print("\n✗ 配置文件不存在: config.yaml")

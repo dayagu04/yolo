@@ -51,6 +51,26 @@ class DetectionConfig(BaseModel):
     conf: Optional[float] = Field(None, ge=0.1, le=0.95)
 
 
+class LoginRequest(BaseModel):
+    """登录请求"""
+    username: str = Field(min_length=1, max_length=50)
+    password: str = Field(min_length=1)
+
+
+class TokenResponse(BaseModel):
+    """登录成功响应"""
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    role: str
+
+
+class UserInfo(BaseModel):
+    """当前用户信息"""
+    username: str
+    role: str
+
+
 class CameraStatus(BaseModel):
     """摄像头状态"""
     model_config = ConfigDict(protected_namespaces=())

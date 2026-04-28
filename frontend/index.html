@@ -307,6 +307,38 @@
     .footer-stat span { color: var(--text); font-weight: 600; }
     .footer-right { margin-left: auto; }
 
+    /* ── Login Overlay ── */
+    #login-overlay {
+      display: none; position: fixed; inset: 0; z-index: 10000;
+      background: rgba(0,0,0,0.85);
+      align-items: center; justify-content: center;
+    }
+    #login-overlay.open { display: flex; }
+    .login-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2rem 2.5rem;
+      width: 320px;
+      display: flex; flex-direction: column; gap: 1rem;
+    }
+    .login-box h2 { font-size: 1.2rem; color: var(--accent); text-align: center; }
+    .login-box input {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); padding: 8px 12px;
+      border-radius: var(--radius); font-size: 14px; width: 100%;
+    }
+    .login-box input:focus { outline: none; border-color: var(--accent); }
+    .login-box .btn-login {
+      background: var(--accent); color: #000; border: none;
+      padding: 9px; border-radius: var(--radius);
+      font-size: 14px; font-weight: 700; cursor: pointer;
+      transition: background 0.2s;
+    }
+    .login-box .btn-login:hover { background: #00bcd4; }
+    .login-box .btn-login:disabled { opacity: 0.5; cursor: not-allowed; }
+    .login-error { color: var(--danger); font-size: 12px; text-align: center; min-height: 16px; }
+
     /* ── Lightbox ── */
     #lightbox {
       display: none; position: fixed;
@@ -453,6 +485,17 @@
   <div class="footer-stat">Model <span id="ft-model">—</span></div>
 </footer>
 
+<!-- Login Overlay -->
+<div id="login-overlay">
+  <div class="login-box">
+    <h2>SAFECAM 登录</h2>
+    <input type="text" id="login-username" placeholder="用户名" autocomplete="username">
+    <input type="password" id="login-password" placeholder="密码" autocomplete="current-password">
+    <div class="login-error" id="login-error"></div>
+    <button type="button" class="btn-login" id="btn-login" onclick="doLogin()">登 录</button>
+  </div>
+</div>
+
 <!-- Lightbox -->
 <div id="lightbox" onclick="closeLightbox()">
   <button type="button" class="close-btn" onclick="closeLightbox()">✕</button>
@@ -470,6 +513,82 @@ let chartTrend = null, chartPie = null;
 let statsInterval = null;
 let footerInterval = null;
 let alertData = [];
+let authToken = localStorage.getItem('auth_token') || '';
+
+function setToken(token) {
+  authToken = token || '';
+  if (authToken) localStorage.setItem('auth_token', authToken);
+  else localStorage.removeItem('auth_token');
+}
+
+function showLogin(message = '') {
+  document.getElementById('login-overlay').classList.add('open');
+  document.getElementById('login-error').textContent = message;
+}
+
+function hideLogin() {
+  document.getElementById('login-overlay').classList.remove('open');
+  document.getElementById('login-error').textContent = '';
+}
+
+async function authFetch(url, options = {}) {
+  const headers = options.headers ? { ...options.headers } : {};
+  if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+  const res = await fetch(url, { ...options, headers });
+  if (res.status === 401) {
+    setToken('');
+    showLogin('登录已过期，请重新登录');
+    throw new Error('unauthorized');
+  }
+  return res;
+}
+
+async function doLogin() {
+  const username = document.getElementById('login-username').value.trim();
+  const password = document.getElementById('login-password').value;
+  const btn = document.getElementById('btn-login');
+  const err = document.getElementById('login-error');
+  err.textContent = '';
+
+  if (!username || !password) {
+    err.textContent = '请输入用户名和密码';
+    return;
+  }
+
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      err.textContent = data.detail || '登录失败';
+      return;
+    }
+    setToken(data.access_token);
+    hideLogin();
+    await bootstrapApp();
+  } catch (_) {
+    err.textContent = '网络错误，请稍后重试';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function bootstrapApp() {
+  connectWS();
+  await loadCameras();
+  await loadHealth();
+  if (footerInterval) clearInterval(footerInterval);
+  footerInterval = setInterval(loadHealth, 5000);
+  try {
+    const res = await authFetch('/api/logs?limit=50');
+    const data = await res.json();
+    (data.logs || []).reverse().forEach(log => addLog(log));
+  } catch (_) { }
+}
 
 // ── Tab ──
 function switchTab(name, btn) {
@@ -495,7 +614,7 @@ let _wsPingInterval = null;
 
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws/alert`);
+  ws = new WebSocket(`${proto}://${location.host}/ws/alert?token=${encodeURIComponent(authToken)}`);
 
   ws.onopen = () => {
     wsRetry = 0;
@@ -541,7 +660,7 @@ function handleMessage(msg) {
 // ── Camera Grid ──
 async function loadCameras() {
   try {
-    const res = await fetch('/api/cameras');
+    const res = await authFetch('/api/cameras');
     const data = await res.json();
     cameras = data.cameras || [];
     renderCameraGrid();
@@ -635,7 +754,7 @@ function initCharts() {
 
 async function loadStats() {
   try {
-    const res = await fetch('/api/stats');
+    const res = await authFetch('/api/stats');
     if (!res.ok) {
       showStatsDisabled();
       return;
@@ -723,7 +842,7 @@ async function loadAlerts(page) {
   if (level) params.set('level', level);
 
   try {
-    const res = await fetch('/api/alerts?' + params);
+    const res = await authFetch('/api/alerts?' + params);
     if (!res.ok) {
       const err = await res.json();
       renderAlertTable([], 0, 0);
@@ -822,7 +941,7 @@ function addLog(msg) {
 // ── Health / Footer ──
 async function loadHealth() {
   try {
-    const res = await fetch('/health');
+    const res = await authFetch('/health');
     const data = await res.json();
     document.getElementById('ft-ws').textContent = data.ws_clients ?? '—';
     document.getElementById('ft-uptime').textContent = fmtUptime(data.uptime_sec);
@@ -861,17 +980,32 @@ function fmtUptime(sec) {
 
 // ── Init ──
 window.addEventListener('DOMContentLoaded', async () => {
-  connectWS();
-  await loadCameras();
-  await loadHealth();
-  footerInterval = setInterval(loadHealth, 5000);
+  // 支持回车提交登录
+  document.getElementById('login-password').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doLogin();
+  });
 
-  // Fetch recent logs
+  if (!authToken) {
+    showLogin();
+    return;
+  }
+
+  // 验证 token 是否仍有效
   try {
-    const res = await fetch('/api/logs?limit=50');
-    const data = await res.json();
-    (data.logs || []).reverse().forEach(log => addLog(log));
-  } catch (e) { /* ignore */ }
+    const res = await fetch('/api/auth/me', {
+      headers: { 'Authorization': `Bearer ${authToken}` }
+    });
+    if (!res.ok) {
+      setToken('');
+      showLogin();
+      return;
+    }
+  } catch (_) {
+    showLogin();
+    return;
+  }
+
+  await bootstrapApp();
 });
 </script>
 </body>

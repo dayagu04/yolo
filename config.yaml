@@ -2,6 +2,18 @@
 # 配置版本: v2.0
 
 # ============================================================
+# 认证配置
+# ============================================================
+auth:
+  access_token_expire_minutes: 60   # Token 有效期（分钟）
+  init_admin_username: "gudaya"       # 首次启动自动创建的管理员用户名
+  # secret_key 通过环境变量 YOLO_AUTH_SECRET_KEY 注入，不在此配置
+  # init_admin_password 通过环境变量 YOLO_AUTH_INIT_ADMIN_PASSWORD 注入
+  cors_origins:
+    - "https://gudaya.chat"
+    - "http://localhost:8000"
+
+# ============================================================
 # 摄像头配置（支持多摄像头）
 # ============================================================
 cameras:
@@ -74,7 +86,7 @@ database:
   host: "localhost"
   port: 3306
   user: "root"
-  password: "Rudai2003"                  # 建议通过环境变量覆盖: YOLO_DATABASE_PASSWORD
+  password: ""                           # 通过环境变量注入: YOLO_DATABASE_PASSWORD
   database: "security_monitor"
   charset: "utf8mb4"
   pool_size: 5                           # 连接池大小
