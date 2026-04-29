@@ -52,8 +52,8 @@ class CaptureProcess:
         try:
             frame = np.ndarray(self._frame_shape, dtype=np.uint8, buffer=self._shm.buf)
             return frame.copy()
-        except Exception:
-            return None
+        except Exception as e:
+            return None  # 共享内存读取失败
 
     def stop(self):
         """停止采集进程"""

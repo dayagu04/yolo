@@ -60,7 +60,7 @@ async def _run_cleanup():
         now = datetime.now()
         try:
             hour, minute = map(int, schedule.split(":"))
-        except Exception:
+        except (ValueError, AttributeError):
             hour, minute = 3, 0
         next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         if next_run <= now:
@@ -159,7 +159,7 @@ def _audit(username: str, action: str, resource: str = "", detail: str = "",
         try:
             db_manager.create_audit_log(username=username, action=action, resource=resource,
                                         detail=detail, ip_address=ip_address, user_agent=user_agent)
-        except Exception:
+        except Exception as e:
             pass
 
 
@@ -272,8 +272,8 @@ async def lifespan(app: FastAPI):
             cam.stop()
             if redis_stats and redis_stats.is_enabled():
                 redis_stats.set_camera_offline(cam.camera_id)
-        except Exception:
-            pass
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"停止摄像头 {getattr(cam, 'camera_id', '?')} 失败: {e}")
 
     for task in [_cleanup_task, _escalation_task]:
         if task and not task.done():
@@ -327,7 +327,7 @@ async def _broadcast(message: dict):
     for ws in _ws_clients:
         try:
             await ws.send_json(message)
-        except Exception:
+        except Exception as e:
             dead.append(ws)
     for ws in dead:
         if ws in _ws_clients:
@@ -362,7 +362,7 @@ async def websocket_alert(websocket: WebSocket):
         return
     try:
         decode_token(token)
-    except Exception:
+    except Exception as e:
         await websocket.close(code=4001)
         return
 
@@ -469,8 +469,8 @@ async def health():
             with db_manager.engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
             db_ok = True
-        except Exception:
-            pass
+        except Exception as e:
+            logging.getLogger(__name__).debug(f"数据库健康检查失败: {e}")
 
     redis_ok = redis_stats.is_enabled() if redis_stats else False
     model_ok = any(s.get("model_loaded") for s in camera_stats) if camera_stats else False

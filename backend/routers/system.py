@@ -31,7 +31,7 @@ async def system_resources(request: Request, _user: dict = Depends(require_opera
                     "memory_total_mb": torch.cuda.get_device_properties(0).total_mem // 1024 // 1024,
                 }
         except Exception:
-            pass
+            pass  # GPU 检测失败不影响系统资源返回
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取系统资源失败: {e}")

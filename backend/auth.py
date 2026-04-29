@@ -24,13 +24,13 @@ _bearer = HTTPBearer(auto_error=False)
 
 # ── 登录失败锁定 ──
 _login_failures: dict[str, list[float]] = defaultdict(list)
-_MAX_ATTEMPTS = 5
-_LOCKOUT_SECONDS = 300  # 5 分钟
+_MAX_ATTEMPTS = int(os.environ.get("YOLO_LOGIN_MAX_ATTEMPTS", "5"))
+_LOCKOUT_SECONDS = int(os.environ.get("YOLO_LOGIN_LOCKOUT_SECONDS", "300"))
 
 # ── 请求限流 ──
 _rate_limits: dict[str, list[float]] = defaultdict(list)
-_DEFAULT_RATE = 60  # 每分钟请求数
-_DEFAULT_WINDOW = 60  # 窗口秒数
+_DEFAULT_RATE = int(os.environ.get("YOLO_RATE_LIMIT_MAX", "60"))
+_DEFAULT_WINDOW = int(os.environ.get("YOLO_RATE_LIMIT_WINDOW", "60"))
 
 
 def _get_secret_key() -> str:
@@ -38,6 +38,10 @@ def _get_secret_key() -> str:
     if not key or key == "change_me_to_a_random_32_byte_hex_string":
         raise RuntimeError(
             "YOLO_AUTH_SECRET_KEY 未设置或仍为默认值，请在 .env 中配置真实密钥"
+        )
+    if len(key) < 32:
+        raise RuntimeError(
+            f"YOLO_AUTH_SECRET_KEY 长度不足（当前 {len(key)} 字符，最少 32 字符）"
         )
     return key
 
@@ -84,8 +88,12 @@ def clear_login_failures(username: str) -> None:
 # ------------------------------------------------------------------ #
 
 def check_rate_limit(request: Request, max_requests: int = _DEFAULT_RATE, window: int = _DEFAULT_WINDOW) -> None:
-    """简单的内存限流，按客户端 IP 限制。"""
-    client_ip = request.client.host if request.client else "unknown"
+    """简单的内存限流，按客户端 IP 限制。支持 X-Forwarded-For。"""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        client_ip = forwarded.split(",")[0].strip()
+    else:
+        client_ip = request.client.host if request.client else "unknown"
     now = time.time()
     requests = _rate_limits[client_ip]
     _rate_limits[client_ip] = [t for t in requests if now - t < window]
@@ -118,9 +126,17 @@ def decode_token(token: str, expected_type: str = "access") -> dict:
     try:
         payload = jwt.decode(token, _get_secret_key(), algorithms=[ALGORITHM])
         if not payload.get("sub"):
-            raise ValueError("missing sub")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token 缺少用户标识",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         if payload.get("type") != expected_type:
-            raise ValueError("token type mismatch")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token 类型不匹配",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         return payload
     except JWTError as e:
         raise HTTPException(
