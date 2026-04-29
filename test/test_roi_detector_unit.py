@@ -58,8 +58,8 @@ class TestIntrusionDetection:
         detector._last_load_ts = 0  # 强制重新加载
         detector._reload_rois()
 
-        # bbox 底部中心 (30, 100) 在多边形内
-        alerts = detector.check_intrusion(0, [(10, 10, 50, 100)], [1])
+        # bbox 底部中心 (30, 80) 在多边形内
+        alerts = detector.check_intrusion(0, [(10, 10, 50, 80)], [1])
         assert len(alerts) == 1
         assert alerts[0]["roi_type"] == "intrusion"
         assert alerts[0]["person_count"] == 1

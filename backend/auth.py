@@ -118,9 +118,17 @@ def decode_token(token: str, expected_type: str = "access") -> dict:
     try:
         payload = jwt.decode(token, _get_secret_key(), algorithms=[ALGORITHM])
         if not payload.get("sub"):
-            raise ValueError("missing sub")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token 缺少用户标识",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         if payload.get("type") != expected_type:
-            raise ValueError("token type mismatch")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token 类型不匹配",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         return payload
     except JWTError as e:
         raise HTTPException(

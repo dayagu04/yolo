@@ -15,9 +15,10 @@ class TestBaseNotifier:
                 pass
 
         n = DummyNotifier({"enabled": True, "push_levels": ["high", "medium"]})
-        assert n._should_push_level("high") is True
-        assert n._should_push_level("medium") is True
-        assert n._should_push_level("low") is False
+        # _should_push_level(alert_level, push_level) — alert>=push 则推送
+        assert n._should_push_level("high", "high") is True
+        assert n._should_push_level("high", "low") is True
+        assert n._should_push_level("low", "high") is False
 
     def test_default_push_levels(self):
         from backend.notifiers.base import BaseNotifier
@@ -27,9 +28,10 @@ class TestBaseNotifier:
                 pass
 
         n = DummyNotifier({"enabled": True})
-        assert n._should_push_level("high") is True
-        assert n._should_push_level("medium") is True
-        assert n._should_push_level("low") is True
+        # 默认 push_level="low"，所有级别都 >= low
+        assert n._should_push_level("high", "low") is True
+        assert n._should_push_level("medium", "low") is True
+        assert n._should_push_level("low", "low") is True
 
 
 # ── 企业微信测试 ──
@@ -50,14 +52,14 @@ class TestWeChatWorkNotifier:
         from backend.notifiers.wechat_work import WeChatWorkNotifier
         n = WeChatWorkNotifier({"enabled": False})
         result = await n.send_alert({"level": "high", "message": "test"})
-        assert result is None
+        assert result is False
 
     @pytest.mark.asyncio
     async def test_send_filtered(self):
         from backend.notifiers.wechat_work import WeChatWorkNotifier
-        n = WeChatWorkNotifier({"enabled": True, "webhook_url": "https://test.com", "push_levels": ["high"]})
+        n = WeChatWorkNotifier({"enabled": True, "webhook_url": "https://test.com", "push_level": "high"})
         result = await n.send_alert({"level": "low", "message": "test"})
-        assert result is None
+        assert result is False
 
 
 # ── 钉钉测试 ──
@@ -73,7 +75,7 @@ class TestDingTalkNotifier:
         from backend.notifiers.dingtalk import DingTalkNotifier
         n = DingTalkNotifier({"enabled": False})
         result = await n.send_alert({"level": "high", "message": "test"})
-        assert result is None
+        assert result is False
 
 
 # ── 邮件测试 ──
@@ -92,7 +94,7 @@ class TestEmailNotifier:
         from backend.notifiers.email_notifier import EmailNotifier
         n = EmailNotifier({"enabled": False})
         result = await n.send_alert({"level": "high", "message": "test"})
-        assert result is None
+        assert result is False
 
 
 # ── Webhook 测试 ──
@@ -108,4 +110,4 @@ class TestWebhookNotifier:
         from backend.notifiers.webhook import WebhookNotifier
         n = WebhookNotifier({"enabled": False})
         result = await n.send_alert({"level": "high", "message": "test"})
-        assert result is None
+        assert result is False
