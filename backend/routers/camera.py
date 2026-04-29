@@ -113,8 +113,10 @@ async def remove_camera(camera_id: int, request: Request, _user: dict = Depends(
         redis = get_redis(request)
         if redis and redis.is_enabled():
             redis.set_camera_offline(camera_id)
-    except Exception:
-        pass
+    except Exception as e:
+        logger = get_logger(request)
+        if logger:
+            logger.log("warning", "camera.stop_failed", f"停止摄像头 {camera_id} 失败: {e}")
 
     audit(request, _user["sub"], "camera_remove", resource=f"camera:{camera_id}")
     logger = get_logger(request)

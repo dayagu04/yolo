@@ -3,7 +3,7 @@
 提供告警记录的持久化存储
 """
 from sqlalchemy import (
-    create_engine, Column, Integer, String, DateTime, Text, Enum, JSON, TIMESTAMP, Boolean, text, func
+    create_engine, Column, Integer, String, DateTime, Text, Enum, JSON, TIMESTAMP, Boolean, text
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
@@ -223,7 +223,7 @@ class DatabaseManager:
         try:
             yield session
             session.commit()
-        except Exception:
+        except Exception as e:
             session.rollback()
             raise
         finally:

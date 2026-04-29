@@ -1,7 +1,6 @@
 """notifiers/ 单元测试"""
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock, MagicMock
-import aiohttp
+from unittest.mock import patch, AsyncMock, MagicMock
 
 
 # ── 基类测试 ──
