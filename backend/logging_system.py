@@ -1,16 +1,24 @@
 """
-后端结构化日志系统（JSON + 内存环形缓冲）
+后端结构化日志系统（JSON + 内存环形缓冲 + 文件持久化）
 """
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 import json
 import logging
+import logging.handlers
 import sys
 
 
 class StructuredLogger:
-    def __init__(self, name: str = "surveillance", max_entries: int = 500):
+    def __init__(
+        self,
+        name: str = "surveillance",
+        max_entries: int = 500,
+        log_dir: str = "logs",
+        log_to_file: bool = True,
+    ):
         self._buffer = deque(maxlen=max_entries)
         self.logger = logging.getLogger(name)
         self.logger.setLevel(logging.INFO)
@@ -21,6 +29,21 @@ class StructuredLogger:
             handler = logging.StreamHandler(stream)
             handler.setFormatter(logging.Formatter("%(message)s"))
             self.logger.addHandler(handler)
+
+            # 文件持久化：按日期轮转，保留 30 天
+            if log_to_file:
+                log_path = Path(log_dir)
+                log_path.mkdir(parents=True, exist_ok=True)
+                file_handler = logging.handlers.TimedRotatingFileHandler(
+                    filename=str(log_path / "surveillance.jsonl"),
+                    when="midnight",
+                    interval=1,
+                    backupCount=30,
+                    encoding="utf-8",
+                    utc=False,
+                )
+                file_handler.setFormatter(logging.Formatter("%(message)s"))
+                self.logger.addHandler(file_handler)
 
     def _iso_now(self) -> str:
         return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")

@@ -22,7 +22,7 @@ class TestCameraFunctions:
 
     def test_camera_status_query(self, base_url):
         """测试摄像头状态查询"""
-        resp = requests.get(f"{base_url}/api/camera/0/status", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/camera/0/status", timeout=5)
         assert resp.status_code == 200
 
         data = resp.json()
@@ -33,7 +33,7 @@ class TestCameraFunctions:
 
     def test_camera_connection(self, base_url):
         """测试摄像头连接状态"""
-        resp = requests.get(f"{base_url}/api/camera/0/status", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/camera/0/status", timeout=5)
         data = resp.json()
 
         # 摄像头应该已连接
@@ -41,7 +41,7 @@ class TestCameraFunctions:
 
     def test_detection_enabled(self, base_url):
         """测试检测功能启用"""
-        resp = requests.get(f"{base_url}/api/camera/0/status", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/camera/0/status", timeout=5)
         data = resp.json()
 
         assert data.get("detection_enabled") is True
@@ -49,7 +49,7 @@ class TestCameraFunctions:
 
     def test_fps_measurement(self, base_url):
         """测试 FPS 测量"""
-        resp = requests.get(f"{base_url}/api/camera/0/status", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/camera/0/status", timeout=5)
         data = resp.json()
 
         fps = data.get("fps", 0)
@@ -75,31 +75,31 @@ class TestCameraFunctions:
         """测试检测配置更新"""
         # 更新置信度阈值
         payload = {"enabled": True, "conf": 0.7}
-        resp = requests.post(f"{base_url}/api/camera/0/config",
+        resp = requests.post(f"{base_url}/api/v1/camera/0/config",
                              json=payload, timeout=5)
         assert resp.status_code == 200
 
         # 验证更新生效
         time.sleep(1)
-        resp = requests.get(f"{base_url}/api/camera/0/status", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/camera/0/status", timeout=5)
         data = resp.json()
         assert abs(data.get("conf_threshold", 0) - 0.7) < 0.01
 
     def test_disable_detection(self, base_url):
         """测试禁用检测"""
         payload = {"enabled": False}
-        resp = requests.post(f"{base_url}/api/camera/0/config",
+        resp = requests.post(f"{base_url}/api/v1/camera/0/config",
                              json=payload, timeout=5)
         assert resp.status_code == 200
 
         # 恢复启用
         payload = {"enabled": True}
-        requests.post(f"{base_url}/api/camera/0/config",
+        requests.post(f"{base_url}/api/v1/camera/0/config",
                       json=payload, timeout=5)
 
     def test_camera_resolution(self, base_url):
         """测试摄像头分辨率"""
-        resp = requests.get(f"{base_url}/api/camera/0/status", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/camera/0/status", timeout=5)
         data = resp.json()
 
         resolution = data.get("resolution", "")
@@ -116,7 +116,7 @@ class TestCameraFunctions:
 
         while time.time() - start_time < 30:
             try:
-                resp = requests.get(f"{base_url}/api/camera/0/status", timeout=5)
+                resp = requests.get(f"{base_url}/api/v1/camera/0/status", timeout=5)
                 if resp.status_code != 200:
                     errors += 1
             except Exception:
@@ -131,7 +131,7 @@ class TestCameraFunctions:
         """测试无效置信度阈值"""
         # 超出范围
         payload = {"conf": 1.5}
-        resp = requests.post(f"{base_url}/api/camera/0/config",
+        resp = requests.post(f"{base_url}/api/v1/camera/0/config",
                              json=payload, timeout=5)
         # 应该返回错误或限制在有效范围
         assert resp.status_code in [200, 422]
@@ -140,14 +140,14 @@ class TestCameraFunctions:
     def test_negative_conf_threshold(self, base_url):
         """测试负数置信度"""
         payload = {"conf": -0.5}
-        resp = requests.post(f"{base_url}/api/camera/0/config",
+        resp = requests.post(f"{base_url}/api/v1/camera/0/config",
                              json=payload, timeout=5)
         assert resp.status_code in [200, 422]
 
     @pytest.mark.exception
     def test_nonexistent_camera(self, base_url):
         """测试不存在的摄像头"""
-        resp = requests.get(f"{base_url}/api/camera/999/status", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/camera/999/status", timeout=5)
         # 可能创建新摄像头或返回错误
         assert resp.status_code in [200, 404, 500]
 

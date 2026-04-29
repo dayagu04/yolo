@@ -557,7 +557,7 @@ async function doLogin() {
 
   btn.disabled = true;
   try {
-    const res = await fetch('/api/auth/login', {
+    const res = await fetch('/api/v1/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
@@ -584,7 +584,7 @@ async function bootstrapApp() {
   if (footerInterval) clearInterval(footerInterval);
   footerInterval = setInterval(loadHealth, 5000);
   try {
-    const res = await authFetch('/api/logs?limit=50');
+    const res = await authFetch('/api/v1/logs?limit=50');
     const data = await res.json();
     (data.logs || []).reverse().forEach(log => addLog(log));
   } catch (_) { }
@@ -660,7 +660,7 @@ function handleMessage(msg) {
 // ── Camera Grid ──
 async function loadCameras() {
   try {
-    const res = await authFetch('/api/cameras');
+    const res = await authFetch('/api/v1/cameras');
     const data = await res.json();
     cameras = data.cameras || [];
     renderCameraGrid();
@@ -754,7 +754,7 @@ function initCharts() {
 
 async function loadStats() {
   try {
-    const res = await authFetch('/api/stats');
+    const res = await authFetch('/api/v1/stats');
     if (!res.ok) {
       showStatsDisabled();
       return;
@@ -842,7 +842,7 @@ async function loadAlerts(page) {
   if (level) params.set('level', level);
 
   try {
-    const res = await authFetch('/api/alerts?' + params);
+    const res = await authFetch('/api/v1/alerts?' + params);
     if (!res.ok) {
       const err = await res.json();
       renderAlertTable([], 0, 0);
@@ -864,7 +864,7 @@ function renderAlertTable(rows, total, page) {
     tbody.innerHTML = rows.map(r => {
       const levelBadge = `<span class="level-badge level-${r.level}">${{high:'高',medium:'中',low:'低'}[r.level] || r.level}</span>`;
       const thumb = r.screenshot_path
-        ? `<img class="thumb" src="/api/alerts/${r.id}/screenshot" onclick="openLightbox('/api/alerts/${r.id}/screenshot')" loading="lazy">`
+        ? `<img class="thumb" src="/api/v1/alerts/${r.id}/screenshot" onclick="openLightbox('/api/v1/alerts/${r.id}/screenshot')" loading="lazy">`
         : '<span class="muted-text">—</span>';
       return `<tr>
         <td>${r.id}</td>
@@ -992,7 +992,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   // 验证 token 是否仍有效
   try {
-    const res = await fetch('/api/auth/me', {
+    const res = await fetch('/api/v1/auth/me', {
       headers: { 'Authorization': `Bearer ${authToken}` }
     });
     if (!res.ok) {

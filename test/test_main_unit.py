@@ -44,7 +44,7 @@ class TestMainRoutes:
         from fastapi.testclient import TestClient
 
         client = TestClient(app)
-        response = client.get("/api/cameras")
+        response = client.get("/api/v1/cameras")
 
         assert response.status_code == 200
         data = response.json()
@@ -64,7 +64,7 @@ class TestMainRoutes:
             mock_get.return_value = mock_cam
             cameras[0] = mock_cam
 
-            response = client.get("/api/camera/0/status")
+            response = client.get("/api/v1/camera/0/status")
 
             assert response.status_code == 200
             data = response.json()
@@ -83,7 +83,7 @@ class TestMainRoutes:
 
         client = TestClient(app)
         response = client.post(
-            "/api/camera/0/config",
+            "/api/v1/camera/0/config",
             json={"enabled": False, "conf": 0.7}
         )
 
@@ -98,7 +98,7 @@ class TestMainRoutes:
 
         with patch('backend.main.db_manager', None):
             client = TestClient(app)
-            response = client.get("/api/alerts")
+            response = client.get("/api/v1/alerts")
 
             assert response.status_code == 503
             data = response.json()
@@ -117,7 +117,7 @@ class TestMainRoutes:
 
         with patch('backend.main.db_manager', mock_db):
             client = TestClient(app)
-            response = client.get("/api/alerts?limit=10")
+            response = client.get("/api/v1/alerts?limit=10")
 
             assert response.status_code == 200
             data = response.json()
@@ -135,7 +135,7 @@ class TestMainRoutes:
             ]
 
             client = TestClient(app)
-            response = client.get("/api/logs?limit=50")
+            response = client.get("/api/v1/logs?limit=50")
 
             assert response.status_code == 200
             data = response.json()
@@ -148,7 +148,7 @@ class TestMainRoutes:
         from fastapi.testclient import TestClient
 
         client = TestClient(app)
-        response = client.get("/api/stats")
+        response = client.get("/api/v1/stats")
 
         assert response.status_code == 503
 
@@ -166,7 +166,7 @@ class TestMainRoutes:
 
         with patch('backend.main.redis_stats', mock_redis):
             client = TestClient(app)
-            response = client.get("/api/stats")
+            response = client.get("/api/v1/stats")
 
             assert response.status_code == 200
             data = response.json()
@@ -179,7 +179,7 @@ class TestMainRoutes:
         from fastapi.testclient import TestClient
 
         client = TestClient(app)
-        response = client.get("/api/camera/invalid/status")
+        response = client.get("/api/v1/camera/invalid/status")
 
         assert response.status_code == 422
 
@@ -190,7 +190,7 @@ class TestMainRoutes:
         from fastapi.testclient import TestClient
 
         client = TestClient(app)
-        response = client.get("/api/camera/-1/status")
+        response = client.get("/api/v1/camera/-1/status")
 
         # 应该能处理或返回错误
         assert response.status_code in [200, 400, 422]
@@ -206,7 +206,7 @@ class TestMainRoutes:
 
         with patch('backend.main.db_manager', mock_db):
             client = TestClient(app)
-            response = client.get("/api/alerts?limit=99999")
+            response = client.get("/api/v1/alerts?limit=99999")
 
             # 应该被限制或返回错误
             assert response.status_code in [200, 422]
@@ -222,7 +222,7 @@ class TestMainRoutes:
 
         with patch('backend.main.db_manager', mock_db):
             client = TestClient(app)
-            response = client.get("/api/alerts")
+            response = client.get("/api/v1/alerts")
 
             assert response.status_code == 500
 
@@ -236,7 +236,7 @@ class TestMainRoutes:
 
         client = TestClient(app)
         response = client.post(
-            "/api/camera/0/config",
+            "/api/v1/camera/0/config",
             json={"enabled": "invalid", "conf": "not_a_number"}
         )
 
@@ -250,7 +250,7 @@ class TestMainRoutes:
 
         client = TestClient(app)
         response = client.post(
-            "/api/camera/0/config",
+            "/api/v1/camera/0/config",
             data="not json",
             headers={"Content-Type": "application/json"}
         )
@@ -272,7 +272,7 @@ class TestDynamicCameraAPI:
             yield
 
     def test_list_cameras_with_config(self):
-        """GET /api/cameras 返回配置中的摄像头，id 字段存在"""
+        """GET /api/v1/cameras 返回配置中的摄像头，id 字段存在"""
         from backend.main import app
         from fastapi.testclient import TestClient
 
@@ -286,7 +286,7 @@ class TestDynamicCameraAPI:
         with patch('backend.main.config', {"cameras": cam_cfg}), \
              patch('backend.main.cameras', {0: mock_cam}):
             client = TestClient(app)
-            resp = client.get("/api/cameras")
+            resp = client.get("/api/v1/cameras")
 
         assert resp.status_code == 200
         data = resp.json()
@@ -297,48 +297,48 @@ class TestDynamicCameraAPI:
         assert cam["name"] == "测试"
 
     def test_add_camera_missing_source(self, mock_app_state):
-        """POST /api/cameras/{id}/add 缺少 source 返回 422"""
+        """POST /api/v1/cameras/{id}/add 缺少 source 返回 422"""
         from backend.main import app
         from fastapi.testclient import TestClient
 
         client = TestClient(app)
-        resp = client.post("/api/cameras/5/add", json={"name": "新摄像头"})
+        resp = client.post("/api/v1/cameras/5/add", json={"name": "新摄像头"})
         assert resp.status_code == 422
 
     def test_add_camera_duplicate(self, mock_app_state):
-        """POST /api/cameras/{id}/add 重复添加返回 409"""
+        """POST /api/v1/cameras/{id}/add 重复添加返回 409"""
         from backend.main import app, cameras
         from fastapi.testclient import TestClient
 
         cameras[5] = Mock()
         client = TestClient(app)
-        resp = client.post("/api/cameras/5/add", json={"source": 0})
+        resp = client.post("/api/v1/cameras/5/add", json={"source": 0})
         assert resp.status_code == 409
 
     def test_add_camera_invalid_json(self, mock_app_state):
-        """POST /api/cameras/{id}/add 非法 JSON 返回 422"""
+        """POST /api/v1/cameras/{id}/add 非法 JSON 返回 422"""
         from backend.main import app
         from fastapi.testclient import TestClient
 
         client = TestClient(app)
         resp = client.post(
-            "/api/cameras/5/add",
+            "/api/v1/cameras/5/add",
             data="not-json",
             headers={"Content-Type": "application/json"},
         )
         assert resp.status_code == 422
 
     def test_remove_camera_not_found(self, mock_app_state):
-        """POST /api/cameras/{id}/remove 不存在返回 404"""
+        """POST /api/v1/cameras/{id}/remove 不存在返回 404"""
         from backend.main import app
         from fastapi.testclient import TestClient
 
         client = TestClient(app)
-        resp = client.post("/api/cameras/99/remove")
+        resp = client.post("/api/v1/cameras/99/remove")
         assert resp.status_code == 404
 
     def test_remove_camera_success(self, mock_app_state):
-        """POST /api/cameras/{id}/remove 成功移除"""
+        """POST /api/v1/cameras/{id}/remove 成功移除"""
         from backend.main import app, cameras
         from fastapi.testclient import TestClient
 
@@ -349,7 +349,7 @@ class TestDynamicCameraAPI:
              patch('backend.main._dispatch_signal'):
             mock_log.log.return_value = {}
             client = TestClient(app)
-            resp = client.post("/api/cameras/3/remove")
+            resp = client.post("/api/v1/cameras/3/remove")
 
         assert resp.status_code == 200
         assert resp.json()["success"] is True

@@ -177,7 +177,7 @@ async def websocket_alert(websocket: WebSocket):
 #  API Mock
 # ------------------------------------------------------------------ #
 
-@app.post("/api/camera/{camera_id}/config")
+@app.post("/api/v1/camera/{camera_id}/config")
 async def update_config(camera_id: int, cfg: dict):
     print(f"[API] 配置更新: {cfg}")
     return {
@@ -195,7 +195,7 @@ async def update_config(camera_id: int, cfg: dict):
     }
 
 
-@app.get("/api/camera/{camera_id}/status")
+@app.get("/api/v1/camera/{camera_id}/status")
 async def camera_status(camera_id: int):
     return {
         "camera_id": camera_id,
@@ -212,7 +212,7 @@ async def camera_status(camera_id: int):
     }
 
 
-@app.get("/api/logs")
+@app.get("/api/v1/logs")
 async def get_logs(limit: int = 100):
     logs = _mock_logs[-limit:]
     return {"count": len(logs), "logs": logs}

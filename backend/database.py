@@ -71,6 +71,32 @@ class User(Base):
         return {"id": self.id, "username": self.username, "role": self.role, "is_active": self.is_active}
 
 
+class AuditLog(Base):
+    """操作审计日志表"""
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+    username = Column(String(50), nullable=False, index=True)
+    action = Column(String(50), nullable=False, index=True)  # login, logout, config_change, camera_add, camera_remove, user_create, user_delete
+    resource = Column(String(200))  # 操作对象描述
+    detail = Column(Text)  # 操作详情 JSON
+    ip_address = Column(String(45))  # 支持 IPv6
+    user_agent = Column(String(500))
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
+            "username": self.username,
+            "action": self.action,
+            "resource": self.resource,
+            "detail": self.detail,
+            "ip_address": self.ip_address,
+        }
+
+
 class DatabaseManager:
     """数据库管理器"""
 
@@ -235,4 +261,58 @@ class DatabaseManager:
         """检查是否存在任意用户（用于首次启动初始化判断）。"""
         with self._session() as session:
             return session.query(User).count() > 0
+
+    # ------------------------------------------------------------------ #
+    #  审计日志 CRUD
+    # ------------------------------------------------------------------ #
+
+    def create_audit_log(
+        self,
+        username: str,
+        action: str,
+        resource: str = "",
+        detail: str = "",
+        ip_address: str = "",
+        user_agent: str = "",
+    ) -> int:
+        with self._session() as session:
+            log = AuditLog(
+                timestamp=datetime.now(),
+                username=username,
+                action=action,
+                resource=resource,
+                detail=detail,
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+            session.add(log)
+            session.flush()
+            return log.id
+
+    def query_audit_logs(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        username: Optional[str] = None,
+        action: Optional[str] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+    ) -> Dict[str, any]:
+        limit = max(1, min(500, limit))
+        offset = max(0, offset)
+
+        with self._session() as session:
+            query = session.query(AuditLog)
+            if username:
+                query = query.filter(AuditLog.username == username)
+            if action:
+                query = query.filter(AuditLog.action == action)
+            if start_time:
+                query = query.filter(AuditLog.timestamp >= start_time)
+            if end_time:
+                query = query.filter(AuditLog.timestamp <= end_time)
+
+            total = query.count()
+            logs = query.order_by(AuditLog.timestamp.desc()).limit(limit).offset(offset).all()
+            return {"total": total, "logs": [l.to_dict() for l in logs]}
 

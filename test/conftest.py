@@ -78,7 +78,7 @@ def backend_server():
     # 预热摄像头（让摄像头提前初始化，避免测试时超时）
     print("预热摄像头...")
     try:
-        resp = requests.get("http://localhost:8000/api/camera/0/status", timeout=30)
+        resp = requests.get("http://localhost:8000/api/v1/camera/0/status", timeout=30)
         if resp.status_code == 200:
             print("摄像头预热完成")
         else:

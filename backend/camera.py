@@ -179,7 +179,11 @@ class CameraManager:
         self.connected = False
 
     def _ensure_camera_connected(self) -> bool:
-        for attempt in (1, 2, 3):
+        max_attempts = 20
+        max_delay = 60  # 最大退避间隔（秒）
+        base_delay = 1  # 初始退避间隔（秒）
+
+        for attempt in range(1, max_attempts + 1):
             if not self.running:
                 return False
             self._reconnect_attempts = attempt
@@ -188,14 +192,17 @@ class CameraManager:
                     self._emit_log("info", "camera.reconnected", "摄像头重连成功",
                                    {"attempt": attempt})
                 return True
-            wait_sec = 2 ** attempt
+
+            wait_sec = min(base_delay * (2 ** (attempt - 1)), max_delay)
             self._emit_log("warning", "camera.reconnect_retry", "摄像头连接失败，准备重试",
-                           {"attempt": attempt, "retry_in_sec": wait_sec})
+                           {"attempt": attempt, "max_attempts": max_attempts,
+                            "retry_in_sec": wait_sec})
             time.sleep(wait_sec)
 
-        self._emit_status("error", "摄像头连接失败",
+        self._emit_status("error", "摄像头连接失败，已达到最大重试次数",
                           {"camera_connected": False,
-                           "reconnect_attempts": self._reconnect_attempts})
+                           "reconnect_attempts": self._reconnect_attempts,
+                           "max_attempts": max_attempts})
         return False
 
     def start(self):

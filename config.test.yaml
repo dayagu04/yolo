@@ -49,7 +49,7 @@ database:
   host: "localhost"
   port: 3306
   user: "root"
-  password: "Rudai2003"
+  password: "${YOLO_DATABASE_PASSWORD}"
   database: "security_monitor"
   charset: "utf8mb4"
   pool_size: 5

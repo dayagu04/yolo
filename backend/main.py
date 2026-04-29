@@ -11,9 +11,9 @@ ROOT = Path(__file__).parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, Request, Depends
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, Request, Depends, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse, RedirectResponse
 import uvicorn
 
 from backend.camera import CameraManager
@@ -58,7 +58,6 @@ async def _run_cleanup():
     )
 
     while True:
-        # 计算下次执行时间
         now = datetime.now()
         try:
             hour, minute = map(int, schedule.split(":"))
@@ -114,6 +113,30 @@ def _do_cleanup(save_dir: str, retention_days: int):
 
 
 # ------------------------------------------------------------------ #
+#  审计日志辅助函数
+# ------------------------------------------------------------------ #
+
+def _audit(username: str, action: str, resource: str = "", detail: str = "",
+           ip_address: str = "", user_agent: str = ""):
+    """写入审计日志（同步，用于异步路由中的快速调用）"""
+    if db_manager:
+        try:
+            db_manager.create_audit_log(
+                username=username, action=action, resource=resource,
+                detail=detail, ip_address=ip_address, user_agent=user_agent,
+            )
+        except Exception as e:
+            structured_logger.log("warning", "audit.write_failed", f"审计日志写入失败: {e}")
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else ""
+
+
+# ------------------------------------------------------------------ #
 #  应用生命周期（lifespan）
 # ------------------------------------------------------------------ #
 
@@ -123,7 +146,6 @@ async def lifespan(app: FastAPI):
     _event_loop = asyncio.get_running_loop()
 
     # ── 启动阶段 ──
-    # 1. 加载并校验配置（支持环境变量指定配置文件）
     config_file = os.environ.get("CONFIG_FILE", "config.yaml")
     try:
         config = load_and_validate_config(ROOT / config_file)
@@ -135,19 +157,16 @@ async def lifespan(app: FastAPI):
         print(f"\n[ERROR] 配置加载异常: {e}\n")
         raise SystemExit(1)
 
-    # 2. 初始化 MySQL
     if config.get("database"):
         try:
             db_manager = DatabaseManager(config["database"])
             db_manager.create_tables()
             print("数据库连接成功")
-            # 首次启动：若无任何用户，自动创建 admin
             _init_admin(db_manager, config)
         except Exception as e:
             print(f"[WARN] 数据库连接失败（告警将不持久化）: {e}")
             db_manager = None
 
-    # 3. 初始化 Redis（可选）
     if config.get("redis"):
         try:
             redis_stats = RedisStats(config["redis"])
@@ -157,12 +176,10 @@ async def lifespan(app: FastAPI):
             print(f"[WARN] Redis 连接失败（实时统计不可用）: {e}")
             redis_stats = None
 
-    # 4. 初始化飞书推送（可选）
     feishu_cfg = config.get("notifications", {}).get("feishu", {})
     if feishu_cfg.get("enabled"):
         try:
             feishu_notifier = FeishuNotifier(feishu_cfg)
-            # 注入截图根目录，供上传图片时拼接相对路径
             save_dir = config.get("alert", {}).get("screenshot", {}).get("save_dir", "data/screenshots")
             feishu_notifier._screenshots_root = ROOT / save_dir
             print("飞书推送已启用")
@@ -170,10 +187,8 @@ async def lifespan(app: FastAPI):
             print(f"[WARN] 飞书推送初始化失败: {e}")
             feishu_notifier = None
 
-    # 5. 启动截图定时清理任务
     _cleanup_task = asyncio.create_task(_run_cleanup())
 
-    # 6. 初始化所有配置的摄像头
     cameras_cfg = config.get("cameras", [])
     if cameras_cfg:
         print(f"初始化 {len(cameras_cfg)} 个摄像头...")
@@ -186,10 +201,9 @@ async def lifespan(app: FastAPI):
 
     structured_logger.log("info", "app.startup", "服务启动完成")
 
-    yield  # ── 应用运行阶段 ──
+    yield
 
     # ── 关闭阶段 ──
-    # 1. 停止所有摄像头线程
     for cam in cameras.values():
         try:
             cam.stop()
@@ -198,7 +212,6 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
-    # 2. 停止清理任务
     if _cleanup_task and not _cleanup_task.done():
         _cleanup_task.cancel()
         try:
@@ -211,8 +224,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="智能视频监控", lifespan=lifespan)
 
-# CORS：允许来源从配置读取，默认只允许本地开发
-_cors_origins = ["http://localhost:8000", "http://127.0.0.1:8000"]
+# CORS
+_cors_origins = config.get("auth", {}).get("cors_origins", ["http://localhost:8000", "http://127.0.0.1:8000"])
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
@@ -220,6 +233,12 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+# ------------------------------------------------------------------ #
+#  API v1 路由器
+# ------------------------------------------------------------------ #
+
+api_v1 = APIRouter(prefix="/api/v1")
 
 
 def _init_admin(db: DatabaseManager, cfg: dict):
@@ -264,7 +283,6 @@ def _camera_signal_callback(message: dict):
     if message.get("type") == "log":
         structured_logger._buffer.append(message)
 
-    # 飞书推送（线程安全：camera 线程 → 主事件循环）
     if message.get("type") == "alert" and feishu_notifier:
         screenshot_path = message.get("data", {}).get("screenshot_path")
         if _event_loop is not None and _event_loop.is_running():
@@ -282,7 +300,6 @@ def _camera_signal_callback(message: dict):
 
 def get_camera(camera_id: int = 0, cam_cfg: Optional[dict] = None) -> CameraManager:
     if camera_id not in cameras:
-        # 从配置列表中查找摄像头配置，或使用传入的 cam_cfg
         if cam_cfg is None:
             cameras_list = config.get("cameras", [])
             cam_cfg = next((c for c in cameras_list if c.get("id") == camera_id), {})
@@ -295,7 +312,6 @@ def get_camera(camera_id: int = 0, cam_cfg: Optional[dict] = None) -> CameraMana
         width = None if auto_resolution else cam_cfg.get("width")
         height = None if auto_resolution else cam_cfg.get("height")
 
-        # GPU 设备选择
         gpu_enabled = det_cfg.get("gpu_enabled", False)
         device = det_cfg.get("device", "cpu") if gpu_enabled else "cpu"
 
@@ -335,41 +351,301 @@ def get_camera(camera_id: int = 0, cam_cfg: Optional[dict] = None) -> CameraMana
     return cameras[camera_id]
 
 
-# ------------------------------------------------------------------ #
-#  认证接口
-# ------------------------------------------------------------------ #
+# ================================================================== #
+#  API v1 路由：认证
+# ================================================================== #
 
-@app.post("/api/auth/login", response_model=TokenResponse)
-async def login(req: LoginRequest):
+@api_v1.post("/auth/login", response_model=TokenResponse)
+async def login(req: LoginRequest, request: Request):
     if not db_manager:
         raise HTTPException(status_code=503, detail="数据库未配置")
     user = db_manager.get_user_by_username(req.username)
     if not user or not verify_password(req.password, user["hashed_password"]):
+        _audit(req.username, "login_failed", ip_address=_client_ip(request))
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     if not user.get("is_active"):
         raise HTTPException(status_code=403, detail="账号已禁用")
 
     expire_min = config.get("auth", {}).get("access_token_expire_minutes", 60)
     token = create_access_token(user["username"], user["role"], expire_minutes=expire_min)
-    return TokenResponse(
-        access_token=token,
-        expires_in=expire_min * 60,
-        role=user["role"],
-    )
+    _audit(req.username, "login", ip_address=_client_ip(request),
+           user_agent=request.headers.get("user-agent", ""))
+    return TokenResponse(access_token=token, expires_in=expire_min * 60, role=user["role"])
 
 
-@app.get("/api/auth/me", response_model=UserInfo)
+@api_v1.get("/auth/me", response_model=UserInfo)
 async def get_me(user: dict = Depends(get_current_user)):
     return UserInfo(username=user["sub"], role=user["role"])
 
 
+# ================================================================== #
+#  API v1 路由：摄像头管理
+# ================================================================== #
+
+@api_v1.get("/cameras")
+async def list_cameras(_user: dict = Depends(get_current_user)):
+    cameras_cfg = config.get("cameras", [])
+    result = []
+    for cam_cfg in cameras_cfg:
+        cam_id = cam_cfg["id"]
+        cam = cameras.get(cam_id)
+        item = {
+            "id": cam_id,
+            "name": cam_cfg.get("name", f"Camera {cam_id}"),
+            "location": cam_cfg.get("location", ""),
+            "source": str(cam_cfg.get("source", cam_id)),
+        }
+        if cam:
+            item.update(cam.get_status())
+            item["id"] = cam_id
+        else:
+            item.update({"connected": False, "running": False, "model_loaded": False})
+        result.append(item)
+    return {"cameras": result, "total": len(result)}
+
+
+@api_v1.post("/cameras/{camera_id}/config")
+async def update_config(camera_id: int, cfg: DetectionConfig, _user: dict = Depends(require_operator)):
+    camera = get_camera(camera_id)
+    if cfg.enabled is not None:
+        camera.toggle_detection(cfg.enabled)
+    if cfg.conf is not None:
+        camera.set_conf(cfg.conf)
+    entry = structured_logger.log(
+        "info", "camera.config_updated", "摄像头配置已更新",
+        camera_id=camera_id,
+        data={"enabled": cfg.enabled, "conf": cfg.conf},
+    )
+    _dispatch_signal(entry)
+    return camera.get_status()
+
+
+@api_v1.get("/camera/{camera_id}/status")
+async def camera_status(camera_id: int, _user: dict = Depends(get_current_user)):
+    return get_camera(camera_id).get_status()
+
+
+@api_v1.post("/cameras/{camera_id}/add")
+async def add_camera(camera_id: int, request: Request, _user: dict = Depends(require_operator)):
+    if camera_id in cameras:
+        raise HTTPException(status_code=409, detail=f"摄像头 {camera_id} 已存在")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=422, detail="请求体必须是合法的 JSON")
+
+    source = body.get("source")
+    if source is None:
+        raise HTTPException(status_code=422, detail="source 字段必填")
+
+    cam_cfg = {
+        "id": camera_id,
+        "source": source,
+        "name": body.get("name", f"Camera {camera_id}"),
+        "location": body.get("location", ""),
+        "auto_resolution": body.get("auto_resolution", True),
+        "width": body.get("width", 1280),
+        "height": body.get("height", 720),
+    }
+
+    try:
+        cam = get_camera(camera_id, cam_cfg)
+        _audit(_user["sub"], "camera_add", resource=f"camera:{camera_id}",
+               detail=f"name={cam_cfg['name']}, source={source}",
+               ip_address=_client_ip(request))
+        entry = structured_logger.log(
+            "info", "camera.added", f"摄像头 {camera_id} 已动态添加",
+            camera_id=camera_id,
+            data={"name": cam_cfg["name"], "source": str(source)},
+        )
+        _dispatch_signal(entry)
+        return {
+            "id": camera_id,
+            "name": cam_cfg["name"],
+            "location": cam_cfg["location"],
+            "source": str(cam_cfg["source"]),
+            **cam.get_status(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"添加摄像头失败: {e}")
+
+
+@api_v1.post("/cameras/{camera_id}/remove")
+async def remove_camera(camera_id: int, request: Request, _user: dict = Depends(require_admin)):
+    if camera_id not in cameras:
+        raise HTTPException(status_code=404, detail=f"摄像头 {camera_id} 不存在")
+
+    cam = cameras.pop(camera_id)
+    try:
+        cam.stop()
+        if redis_stats and redis_stats.is_enabled():
+            redis_stats.set_camera_offline(camera_id)
+    except Exception:
+        pass
+
+    _audit(_user["sub"], "camera_remove", resource=f"camera:{camera_id}",
+           ip_address=_client_ip(request))
+    entry = structured_logger.log(
+        "info", "camera.removed", f"摄像头 {camera_id} 已移除",
+        camera_id=camera_id,
+    )
+    _dispatch_signal(entry)
+    return {"success": True, "camera_id": camera_id}
+
+
+# ================================================================== #
+#  API v1 路由：告警与日志
+# ================================================================== #
+
+@api_v1.get("/alerts")
+async def get_alerts(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    camera_id: Optional[int] = Query(None),
+    start_time: Optional[str] = Query(None),
+    end_time: Optional[str] = Query(None),
+    level: Optional[str] = Query(None),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
+    _user: dict = Depends(get_current_user),
+):
+    if not db_manager:
+        raise HTTPException(status_code=503, detail="数据库未配置")
+    try:
+        start_dt = datetime.fromisoformat(start_time) if start_time else None
+        end_dt = datetime.fromisoformat(end_time) if end_time else None
+        result = db_manager.query_alerts(
+            limit=limit, offset=offset, camera_id=camera_id,
+            start_time=start_dt, end_time=end_dt, level=level, order=order,
+        )
+        result["limit"] = limit
+        result["offset"] = offset
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=f"时间格式错误: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询失败: {e}")
+
+
+@api_v1.get("/alerts/{alert_id}/screenshot")
+async def get_alert_screenshot(alert_id: int, _user: dict = Depends(get_current_user)):
+    if not db_manager:
+        raise HTTPException(status_code=503, detail="数据库未配置")
+    try:
+        alert = db_manager.get_alert_by_id(alert_id)
+        if not alert or not alert.get("screenshot_path"):
+            raise HTTPException(status_code=404, detail="截图不存在")
+
+        save_dir = config.get("alert", {}).get("screenshot", {}).get(
+            "save_dir", "data/screenshots"
+        )
+        screenshot_file = ROOT / save_dir / alert["screenshot_path"]
+        if not screenshot_file.exists():
+            raise HTTPException(status_code=404, detail="截图文件已删除")
+
+        return FileResponse(screenshot_file, media_type="image/jpeg")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取截图失败: {e}")
+
+
+@api_v1.get("/logs")
+async def get_logs(limit: int = Query(100, ge=1, le=500), _user: dict = Depends(get_current_user)):
+    logs = structured_logger.get_recent_logs(limit)
+    return {"count": len(logs), "logs": logs}
+
+
+@api_v1.get("/stats")
+async def get_stats(_user: dict = Depends(get_current_user)):
+    if not redis_stats or not redis_stats.is_enabled():
+        return JSONResponse(status_code=503, content={"error": "Redis 统计功能未启用"})
+    try:
+        return redis_stats.get_all_stats()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取统计数据失败: {e}")
+
+
+@api_v1.post("/cleanup")
+async def manual_cleanup(request: Request, _user: dict = Depends(require_admin)):
+    """手动触发截图和数据库清理"""
+    if not config:
+        raise HTTPException(status_code=503, detail="配置未加载")
+
+    retention_days = config.get("alert", {}).get("screenshot", {}).get("retention_days", 30)
+    save_dir = config.get("alert", {}).get("screenshot", {}).get("save_dir", "data/screenshots")
+
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            None, _do_cleanup, save_dir, retention_days
+        )
+        _audit(_user["sub"], "manual_cleanup", resource=save_dir,
+               detail=f"retention_days={retention_days}", ip_address=_client_ip(request))
+        return {
+            "status": "ok",
+            "message": "清理任务已执行",
+            "timestamp": structured_logger._iso_now(),
+            "retention_days": retention_days,
+            "save_dir": save_dir,
+        }
+    except Exception as e:
+        structured_logger.log("error", "system.cleanup_failed", f"手动清理失败: {e}")
+        raise HTTPException(status_code=500, detail=f"清理失败: {e}")
+
+
+# ================================================================== #
+#  API v1 路由：审计日志查询
+# ================================================================== #
+
+@api_v1.get("/audit-logs")
+async def get_audit_logs(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    username: Optional[str] = Query(None),
+    action: Optional[str] = Query(None),
+    start_time: Optional[str] = Query(None),
+    end_time: Optional[str] = Query(None),
+    _user: dict = Depends(require_admin),
+):
+    if not db_manager:
+        raise HTTPException(status_code=503, detail="数据库未配置")
+    try:
+        start_dt = datetime.fromisoformat(start_time) if start_time else None
+        end_dt = datetime.fromisoformat(end_time) if end_time else None
+        return db_manager.query_audit_logs(
+            limit=limit, offset=offset, username=username,
+            action=action, start_time=start_dt, end_time=end_dt,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询审计日志失败: {e}")
+
+
 # ------------------------------------------------------------------ #
-#  WebSocket /ws/alert
+#  注册 API v1 路由器
+# ------------------------------------------------------------------ #
+
+app.include_router(api_v1)
+
+
+# ------------------------------------------------------------------ #
+#  旧版 /api/ 路由重定向（向后兼容）
+# ------------------------------------------------------------------ #
+
+@app.api_route("/api/{path:path}", methods=["GET", "POST"])
+async def legacy_api_redirect(path: str, request: Request):
+    """将旧版 /api/ 请求重定向到 /api/v1/"""
+    new_url = f"/api/v1/{path}"
+    if request.url.query:
+        new_url += f"?{request.url.query}"
+    return RedirectResponse(url=new_url, status_code=307)
+
+
+# ------------------------------------------------------------------ #
+#  非 API 路由（直接挂在 app 上）
 # ------------------------------------------------------------------ #
 
 @app.websocket("/ws/alert")
 async def websocket_alert(websocket: WebSocket):
-    # WebSocket 通过 ?token= 查询参数认证
     token = websocket.query_params.get("token", "")
     if not token:
         await websocket.close(code=4001)
@@ -408,10 +684,6 @@ async def websocket_alert(websocket: WebSocket):
         _dispatch_signal(entry)
 
 
-# ------------------------------------------------------------------ #
-#  视频流
-# ------------------------------------------------------------------ #
-
 @app.get("/video_feed")
 async def video_feed(camera_id: int = 0, _user: dict = Depends(get_current_user)):
     camera = get_camera(camera_id)
@@ -421,50 +693,10 @@ async def video_feed(camera_id: int = 0, _user: dict = Depends(get_current_user)
     )
 
 
-# ------------------------------------------------------------------ #
-#  摄像头配置 & 状态
-# ------------------------------------------------------------------ #
-
-@app.post("/api/camera/{camera_id}/config")
-async def update_config(camera_id: int, cfg: DetectionConfig, _user: dict = Depends(require_operator)):
-    camera = get_camera(camera_id)
-    if cfg.enabled is not None:
-        camera.toggle_detection(cfg.enabled)
-    if cfg.conf is not None:
-        camera.set_conf(cfg.conf)
-    entry = structured_logger.log(
-        "info", "camera.config_updated", "摄像头配置已更新",
-        camera_id=camera_id,
-        data={"enabled": cfg.enabled, "conf": cfg.conf},
-    )
-    _dispatch_signal(entry)
-    return camera.get_status()
-
-
-@app.get("/api/camera/{camera_id}/status")
-async def camera_status(camera_id: int, _user: dict = Depends(get_current_user)):
-    return get_camera(camera_id).get_status()
-
-
-# ------------------------------------------------------------------ #
-#  日志查询
-# ------------------------------------------------------------------ #
-
-@app.get("/api/logs")
-async def get_logs(limit: int = Query(100, ge=1, le=500), _user: dict = Depends(get_current_user)):
-    logs = structured_logger.get_recent_logs(limit)
-    return {"count": len(logs), "logs": logs}
-
-
-# ------------------------------------------------------------------ #
-#  健康检查（细化）
-# ------------------------------------------------------------------ #
-
 @app.get("/health")
 async def health():
     camera_stats = [cam.get_status() for cam in cameras.values()]
 
-    # db 子状态
     db_ok = False
     if db_manager:
         try:
@@ -475,13 +707,8 @@ async def health():
         except Exception:
             db_ok = False
 
-    # redis 子状态
     redis_ok = redis_stats.is_enabled() if redis_stats else False
-
-    # model 子状态（任意摄像头模型已加载则视为 ok）
     model_ok = any(s.get("model_loaded") for s in camera_stats) if camera_stats else False
-
-    # 总体状态
     cams_ok = all(s["connected"] and s["model_loaded"] for s in camera_stats) if camera_stats else True
     status = "ok" if (cams_ok and (db_manager is None or db_ok)) else "degraded"
 
@@ -499,204 +726,6 @@ async def health():
         "cameras": camera_stats,
     }
 
-
-# ------------------------------------------------------------------ #
-#  告警历史查询
-# ------------------------------------------------------------------ #
-
-@app.get("/api/alerts")
-async def get_alerts(
-    limit: int = Query(50, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-    camera_id: Optional[int] = Query(None),
-    start_time: Optional[str] = Query(None),
-    end_time: Optional[str] = Query(None),
-    level: Optional[str] = Query(None),
-    order: str = Query("desc", pattern="^(asc|desc)$"),
-    _user: dict = Depends(get_current_user),
-):
-    if not db_manager:
-        raise HTTPException(status_code=503, detail="数据库未配置")
-    try:
-        start_dt = datetime.fromisoformat(start_time) if start_time else None
-        end_dt = datetime.fromisoformat(end_time) if end_time else None
-        result = db_manager.query_alerts(
-            limit=limit, offset=offset, camera_id=camera_id,
-            start_time=start_dt, end_time=end_dt, level=level, order=order,
-        )
-        result["limit"] = limit
-        result["offset"] = offset
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=f"时间格式错误: {e}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"查询失败: {e}")
-
-
-@app.get("/api/alerts/{alert_id}/screenshot")
-async def get_alert_screenshot(alert_id: int, _user: dict = Depends(get_current_user)):
-    if not db_manager:
-        raise HTTPException(status_code=503, detail="数据库未配置")
-    try:
-        alert = db_manager.get_alert_by_id(alert_id)
-        if not alert or not alert.get("screenshot_path"):
-            raise HTTPException(status_code=404, detail="截图不存在")
-
-        save_dir = config.get("alert", {}).get("screenshot", {}).get(
-            "save_dir", "data/screenshots"
-        )
-        screenshot_file = ROOT / save_dir / alert["screenshot_path"]
-        if not screenshot_file.exists():
-            raise HTTPException(status_code=404, detail="截图文件已删除")
-
-        return FileResponse(screenshot_file, media_type="image/jpeg")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取截图失败: {e}")
-
-
-# ------------------------------------------------------------------ #
-#  手动清理（测试用）
-# ------------------------------------------------------------------ #
-
-@app.post("/api/cleanup")
-async def manual_cleanup(_user: dict = Depends(require_admin)):
-    """手动触发截图和数据库清理（测试用）"""
-    if not config:
-        raise HTTPException(status_code=503, detail="配置未加载")
-
-    retention_days = (
-        config.get("alert", {}).get("screenshot", {}).get("retention_days", 30)
-    )
-    save_dir = (
-        config.get("alert", {}).get("screenshot", {}).get("save_dir", "data/screenshots")
-    )
-
-    try:
-        await asyncio.get_running_loop().run_in_executor(
-            None, _do_cleanup, save_dir, retention_days
-        )
-        return {
-            "status": "ok",
-            "message": "清理任务已执行",
-            "timestamp": structured_logger._iso_now(),
-            "retention_days": retention_days,
-            "save_dir": save_dir,
-        }
-    except Exception as e:
-        structured_logger.log("error", "system.cleanup_failed", f"手动清理失败: {e}")
-        raise HTTPException(status_code=500, detail=f"清理失败: {e}")
-
-
-# ------------------------------------------------------------------ #
-#  实时统计数据
-# ------------------------------------------------------------------ #
-
-@app.get("/api/stats")
-async def get_stats(_user: dict = Depends(get_current_user)):
-    if not redis_stats or not redis_stats.is_enabled():
-        return JSONResponse(status_code=503, content={"error": "Redis 统计功能未启用"})
-    try:
-        return redis_stats.get_all_stats()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取统计数据失败: {e}")
-
-
-# ------------------------------------------------------------------ #
-#  摄像头动态管理 API
-# ------------------------------------------------------------------ #
-
-@app.get("/api/cameras")
-async def list_cameras(_user: dict = Depends(get_current_user)):
-    cameras_cfg = config.get("cameras", [])
-    result = []
-    for cam_cfg in cameras_cfg:
-        cam_id = cam_cfg["id"]
-        cam = cameras.get(cam_id)
-        item = {
-            "id": cam_id,
-            "name": cam_cfg.get("name", f"Camera {cam_id}"),
-            "location": cam_cfg.get("location", ""),
-            "source": str(cam_cfg.get("source", cam_id)),
-        }
-        if cam:
-            item.update(cam.get_status())
-            # 前端统一使用 id 字段
-            item["id"] = cam_id
-        else:
-            item.update({"connected": False, "running": False, "model_loaded": False})
-        result.append(item)
-    return {"cameras": result, "total": len(result)}
-
-
-@app.post("/api/cameras/{camera_id}/add")
-async def add_camera(camera_id: int, request: Request, _user: dict = Depends(require_operator)):
-    if camera_id in cameras:
-        raise HTTPException(status_code=409, detail=f"摄像头 {camera_id} 已存在")
-
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=422, detail="请求体必须是合法的 JSON")
-
-    source = body.get("source")
-    if source is None:
-        raise HTTPException(status_code=422, detail="source 字段必填")
-
-    cam_cfg = {
-        "id": camera_id,
-        "source": source,
-        "name": body.get("name", f"Camera {camera_id}"),
-        "location": body.get("location", ""),
-        "auto_resolution": body.get("auto_resolution", True),
-        "width": body.get("width", 1280),
-        "height": body.get("height", 720),
-    }
-
-    try:
-        cam = get_camera(camera_id, cam_cfg)
-        entry = structured_logger.log(
-            "info", "camera.added", f"摄像头 {camera_id} 已动态添加",
-            camera_id=camera_id,
-            data={"name": cam_cfg["name"], "source": str(source)},
-        )
-        _dispatch_signal(entry)
-        return {
-            "id": camera_id,
-            "name": cam_cfg["name"],
-            "location": cam_cfg["location"],
-            "source": str(cam_cfg["source"]),
-            **cam.get_status(),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"添加摄像头失败: {e}")
-
-
-@app.post("/api/cameras/{camera_id}/remove")
-async def remove_camera(camera_id: int, _user: dict = Depends(require_admin)):
-    if camera_id not in cameras:
-        raise HTTPException(status_code=404, detail=f"摄像头 {camera_id} 不存在")
-
-    cam = cameras.pop(camera_id)
-    try:
-        cam.stop()
-        if redis_stats and redis_stats.is_enabled():
-            redis_stats.set_camera_offline(camera_id)
-    except Exception:
-        pass
-
-    entry = structured_logger.log(
-        "info", "camera.removed", f"摄像头 {camera_id} 已移除",
-        camera_id=camera_id,
-    )
-    _dispatch_signal(entry)
-    return {"success": True, "camera_id": camera_id}
-
-
-# ------------------------------------------------------------------ #
-#  前端页面
-# ------------------------------------------------------------------ #
 
 FRONTEND = ROOT / "frontend"
 

@@ -319,7 +319,7 @@ class SystemTester:
         # 测试 2: 摄像头列表
         start = time.time()
         try:
-            resp = requests.get(f"{self.base_url}/api/cameras", timeout=5)
+            resp = requests.get(f"{self.base_url}/api/v1/cameras", timeout=5)
             duration = time.time() - start
             if resp.status_code == 200:
                 data = resp.json()
@@ -335,7 +335,7 @@ class SystemTester:
         # 测试 3: 告警历史查询
         start = time.time()
         try:
-            resp = requests.get(f"{self.base_url}/api/alerts?limit=10", timeout=5)
+            resp = requests.get(f"{self.base_url}/api/v1/alerts?limit=10", timeout=5)
             duration = time.time() - start
             if resp.status_code == 200:
                 data = resp.json()
@@ -351,7 +351,7 @@ class SystemTester:
         # 测试 4: 日志查询
         start = time.time()
         try:
-            resp = requests.get(f"{self.base_url}/api/logs?limit=50", timeout=5)
+            resp = requests.get(f"{self.base_url}/api/v1/logs?limit=50", timeout=5)
             duration = time.time() - start
             if resp.status_code == 200:
                 data = resp.json()
@@ -494,7 +494,7 @@ class SystemTester:
         # 测试 2: 检查摄像头状态（通过 API）
         start = time.time()
         try:
-            resp = requests.get(f"{self.base_url}/api/camera/0/status", timeout=5)
+            resp = requests.get(f"{self.base_url}/api/v1/camera/0/status", timeout=5)
             duration = time.time() - start
             if resp.status_code == 200:
                 data = resp.json()
@@ -541,7 +541,7 @@ class SystemTester:
         # 测试 1: 摄像头列表 API
         start = time.time()
         try:
-            resp = requests.get(f"{self.base_url}/api/cameras", timeout=5)
+            resp = requests.get(f"{self.base_url}/api/v1/cameras", timeout=5)
             duration = time.time() - start
             if resp.status_code == 200:
                 data = resp.json()
@@ -557,7 +557,7 @@ class SystemTester:
         # 测试 2: 告警查询分页
         start = time.time()
         try:
-            resp = requests.get(f"{self.base_url}/api/alerts?limit=5&offset=0", timeout=5)
+            resp = requests.get(f"{self.base_url}/api/v1/alerts?limit=5&offset=0", timeout=5)
             duration = time.time() - start
             if resp.status_code == 200:
                 data = resp.json()
@@ -573,7 +573,7 @@ class SystemTester:
         # 测试 3: 告警筛选（按摄像头）
         start = time.time()
         try:
-            resp = requests.get(f"{self.base_url}/api/alerts?camera_id=0&limit=10", timeout=5)
+            resp = requests.get(f"{self.base_url}/api/v1/alerts?camera_id=0&limit=10", timeout=5)
             duration = time.time() - start
             if resp.status_code == 200:
                 self.result.add_result(module, "告警筛选（摄像头）", "PASS", "", duration)
@@ -587,7 +587,7 @@ class SystemTester:
         # 测试 4: 告警筛选（按级别）
         start = time.time()
         try:
-            resp = requests.get(f"{self.base_url}/api/alerts?level=high&limit=10", timeout=5)
+            resp = requests.get(f"{self.base_url}/api/v1/alerts?level=high&limit=10", timeout=5)
             duration = time.time() - start
             if resp.status_code == 200:
                 self.result.add_result(module, "告警筛选（级别）", "PASS", "", duration)
@@ -602,7 +602,7 @@ class SystemTester:
         start = time.time()
         try:
             payload = {"enabled": True, "conf": 0.6}
-            resp = requests.post(f"{self.base_url}/api/camera/0/config",
+            resp = requests.post(f"{self.base_url}/api/v1/camera/0/config",
                                  json=payload, timeout=5)
             duration = time.time() - start
             if resp.status_code == 200:
@@ -702,7 +702,7 @@ class SystemTester:
         # 测试 1: 无效的摄像头 ID
         start = time.time()
         try:
-            resp = requests.get(f"{self.base_url}/api/camera/999/status", timeout=5)
+            resp = requests.get(f"{self.base_url}/api/v1/camera/999/status", timeout=5)
             duration = time.time() - start
             # 应该返回 200 并创建新摄像头，或返回错误
             if resp.status_code in [200, 404, 500]:
@@ -718,7 +718,7 @@ class SystemTester:
         # 测试 2: 超大分页参数
         start = time.time()
         try:
-            resp = requests.get(f"{self.base_url}/api/alerts?limit=1000&offset=0", timeout=5)
+            resp = requests.get(f"{self.base_url}/api/v1/alerts?limit=1000&offset=0", timeout=5)
             duration = time.time() - start
             if resp.status_code in [200, 422]:  # 200 或参数验证错误
                 self.result.add_result(module, "超大分页参数", "PASS",
@@ -733,7 +733,7 @@ class SystemTester:
         # 测试 3: 无效的时间格式
         start = time.time()
         try:
-            resp = requests.get(f"{self.base_url}/api/alerts?start_time=invalid", timeout=5)
+            resp = requests.get(f"{self.base_url}/api/v1/alerts?start_time=invalid", timeout=5)
             duration = time.time() - start
             if resp.status_code in [200, 422]:  # 应该返回参数错误
                 self.result.add_result(module, "无效时间格式", "PASS",

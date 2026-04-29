@@ -23,7 +23,7 @@ class TestBackendAPI:
 
     def test_camera_list(self, base_url):
         """测试摄像头列表接口"""
-        resp = requests.get(f"{base_url}/api/cameras", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/cameras", timeout=5)
         assert resp.status_code == 200
 
         data = resp.json()
@@ -32,7 +32,7 @@ class TestBackendAPI:
 
     def test_camera_status(self, base_url):
         """测试摄像头状态接口"""
-        resp = requests.get(f"{base_url}/api/camera/0/status", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/camera/0/status", timeout=5)
         assert resp.status_code == 200
 
         data = resp.json()
@@ -43,13 +43,13 @@ class TestBackendAPI:
     def test_camera_config_update(self, base_url):
         """测试摄像头配置更新"""
         payload = {"enabled": True, "conf": 0.6}
-        resp = requests.post(f"{base_url}/api/camera/0/config",
+        resp = requests.post(f"{base_url}/api/v1/camera/0/config",
                              json=payload, timeout=5)
         assert resp.status_code == 200
 
     def test_alerts_query(self, base_url):
         """测试告警查询接口"""
-        resp = requests.get(f"{base_url}/api/alerts?limit=10", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/alerts?limit=10", timeout=5)
         assert resp.status_code == 200
 
         data = resp.json()
@@ -59,15 +59,15 @@ class TestBackendAPI:
 
     def test_alerts_pagination(self, base_url):
         """测试告警分页"""
-        resp1 = requests.get(f"{base_url}/api/alerts?limit=5&offset=0", timeout=5)
-        resp2 = requests.get(f"{base_url}/api/alerts?limit=5&offset=5", timeout=5)
+        resp1 = requests.get(f"{base_url}/api/v1/alerts?limit=5&offset=0", timeout=5)
+        resp2 = requests.get(f"{base_url}/api/v1/alerts?limit=5&offset=5", timeout=5)
 
         assert resp1.status_code == 200
         assert resp2.status_code == 200
 
     def test_alerts_filter_by_camera(self, base_url):
         """测试按摄像头筛选告警"""
-        resp = requests.get(f"{base_url}/api/alerts?camera_id=0&limit=10", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/alerts?camera_id=0&limit=10", timeout=5)
         assert resp.status_code == 200
 
         data = resp.json()
@@ -76,12 +76,12 @@ class TestBackendAPI:
 
     def test_alerts_filter_by_level(self, base_url):
         """测试按级别筛选告警"""
-        resp = requests.get(f"{base_url}/api/alerts?level=high&limit=10", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/alerts?level=high&limit=10", timeout=5)
         assert resp.status_code == 200
 
     def test_logs_query(self, base_url):
         """测试日志查询接口"""
-        resp = requests.get(f"{base_url}/api/logs?limit=50", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/logs?limit=50", timeout=5)
         assert resp.status_code == 200
 
         data = resp.json()
@@ -111,33 +111,33 @@ class TestBackendAPI:
     @pytest.mark.boundary
     def test_invalid_camera_id(self, base_url):
         """测试无效摄像头 ID"""
-        resp = requests.get(f"{base_url}/api/camera/999/status", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/camera/999/status", timeout=5)
         # 应该返回 200（创建新摄像头）或 404
         assert resp.status_code in [200, 404, 500]
 
     @pytest.mark.boundary
     def test_oversized_limit(self, base_url):
         """测试超大 limit 参数"""
-        resp = requests.get(f"{base_url}/api/alerts?limit=10000", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/alerts?limit=10000", timeout=5)
         # 应该返回 422（参数错误）或限制最大值
         assert resp.status_code in [200, 422]
 
     @pytest.mark.boundary
     def test_negative_offset(self, base_url):
         """测试负数 offset"""
-        resp = requests.get(f"{base_url}/api/alerts?offset=-1", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/alerts?offset=-1", timeout=5)
         assert resp.status_code in [200, 422]
 
     @pytest.mark.boundary
     def test_invalid_time_format(self, base_url):
         """测试无效时间格式"""
-        resp = requests.get(f"{base_url}/api/alerts?start_time=invalid", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/alerts?start_time=invalid", timeout=5)
         assert resp.status_code in [200, 422]
 
     @pytest.mark.boundary
     def test_empty_query_params(self, base_url):
         """测试空查询参数"""
-        resp = requests.get(f"{base_url}/api/alerts?camera_id=&level=", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/alerts?camera_id=&level=", timeout=5)
         # 空参数可能返回 422（验证失败）或 200（忽略空参数）
         assert resp.status_code in [200, 422]
 
@@ -173,14 +173,14 @@ class TestBackendAPI:
     @pytest.mark.exception
     def test_invalid_json_payload(self, base_url):
         """测试无效 JSON 负载"""
-        resp = requests.post(f"{base_url}/api/camera/0/config",
+        resp = requests.post(f"{base_url}/api/v1/camera/0/config",
                              data="invalid json", timeout=5)
         assert resp.status_code in [400, 422]
 
     @pytest.mark.exception
     def test_missing_required_fields(self, base_url):
         """测试缺少必填字段"""
-        resp = requests.post(f"{base_url}/api/camera/0/config",
+        resp = requests.post(f"{base_url}/api/v1/camera/0/config",
                              json={}, timeout=5)
         # 应该返回错误或使用默认值
         assert resp.status_code in [200, 400, 422]
@@ -189,7 +189,7 @@ class TestBackendAPI:
     def test_sql_injection_attempt(self, base_url):
         """测试 SQL 注入防护"""
         malicious = "0' OR '1'='1"
-        resp = requests.get(f"{base_url}/api/alerts?camera_id={malicious}", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/alerts?camera_id={malicious}", timeout=5)
         # 应该安全处理，不返回所有数据
         assert resp.status_code in [200, 422]
 
@@ -197,5 +197,5 @@ class TestBackendAPI:
     def test_xss_attempt(self, base_url):
         """测试 XSS 防护"""
         xss_payload = "<script>alert('xss')</script>"
-        resp = requests.get(f"{base_url}/api/alerts?level={xss_payload}", timeout=5)
+        resp = requests.get(f"{base_url}/api/v1/alerts?level={xss_payload}", timeout=5)
         assert resp.status_code in [200, 422]
