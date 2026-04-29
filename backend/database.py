@@ -97,6 +97,67 @@ class AuditLog(Base):
         }
 
 
+class AlertEscalation(Base):
+    """告警升级记录表"""
+    __tablename__ = "alert_escalations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    alert_id = Column(Integer, nullable=False, index=True)  # 关联 alerts.id
+    from_level = Column(String(20), nullable=False)  # 原始告警级别
+    to_level = Column(String(20), nullable=False)     # 升级后级别
+    reason = Column(String(500))                       # 升级原因
+    escalated_at = Column(DateTime(timezone=True), nullable=False)
+    notified = Column(Boolean, default=False)          # 是否已通知
+    notified_at = Column(DateTime(timezone=True))      # 通知时间
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "alert_id": self.alert_id,
+            "from_level": self.from_level,
+            "to_level": self.to_level,
+            "reason": self.reason,
+            "escalated_at": self.escalated_at.isoformat() if self.escalated_at else None,
+            "notified": self.notified,
+            "notified_at": self.notified_at.isoformat() if self.notified_at else None,
+        }
+
+
+class CameraROI(Base):
+    """摄像头 ROI（感兴趣区域）配置表"""
+    __tablename__ = "camera_rois"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    camera_id = Column(Integer, nullable=False, index=True)
+    name = Column(String(100), nullable=False)          # 区域名称
+    roi_type = Column(
+        Enum("intrusion", "loitering", "gathering", "monitoring"),
+        default="intrusion", nullable=False,
+    )
+    polygon = Column(JSON, nullable=False)               # 多边形顶点坐标 [[x,y], ...]
+    min_persons = Column(Integer, default=1)             # 触发最小人数
+    min_duration_sec = Column(Integer, default=0)        # 最小持续时间（徘徊检测用）
+    alert_level = Column(Enum("low", "medium", "high"), default="high")
+    enabled = Column(Boolean, default=True)
+    created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "camera_id": self.camera_id,
+            "name": self.name,
+            "roi_type": self.roi_type,
+            "polygon": self.polygon,
+            "min_persons": self.min_persons,
+            "min_duration_sec": self.min_duration_sec,
+            "alert_level": self.alert_level,
+            "enabled": self.enabled,
+        }
+
+
 class DatabaseManager:
     """数据库管理器"""
 
@@ -385,4 +446,129 @@ class DatabaseManager:
             total = query.count()
             logs = query.order_by(AuditLog.timestamp.desc()).limit(limit).offset(offset).all()
             return {"total": total, "logs": [l.to_dict() for l in logs]}
+
+    # ------------------------------------------------------------------ #
+    #  告警升级 CRUD
+    # ------------------------------------------------------------------ #
+
+    def create_escalation(
+        self,
+        alert_id: int,
+        from_level: str,
+        to_level: str,
+        reason: str = "",
+    ) -> int:
+        with self._session() as session:
+            esc = AlertEscalation(
+                alert_id=alert_id,
+                from_level=from_level,
+                to_level=to_level,
+                reason=reason,
+                escalated_at=datetime.now(),
+            )
+            session.add(esc)
+            session.flush()
+            return esc.id
+
+    def get_pending_escalations(self, limit: int = 50) -> list[dict]:
+        """获取未通知的升级记录"""
+        with self._session() as session:
+            rows = (
+                session.query(AlertEscalation)
+                .filter(AlertEscalation.notified == False)
+                .order_by(AlertEscalation.escalated_at.asc())
+                .limit(limit)
+                .all()
+            )
+            return [r.to_dict() for r in rows]
+
+    def mark_escalation_notified(self, escalation_id: int):
+        with self._session() as session:
+            esc = session.query(AlertEscalation).filter(AlertEscalation.id == escalation_id).first()
+            if esc:
+                esc.notified = True
+                esc.notified_at = datetime.now()
+
+    def escalate_alert(self, alert_id: int, new_level: str, reason: str = "") -> bool:
+        """升级告警级别并记录升级历史"""
+        with self._session() as session:
+            alert = session.query(Alert).filter(Alert.id == alert_id).first()
+            if not alert or alert.level == new_level:
+                return False
+            old_level = alert.level
+            alert.level = new_level
+            esc = AlertEscalation(
+                alert_id=alert_id,
+                from_level=old_level,
+                to_level=new_level,
+                reason=reason,
+                escalated_at=datetime.now(),
+            )
+            session.add(esc)
+            return True
+
+    def get_alert_escalations(self, alert_id: int) -> list[dict]:
+        """获取指定告警的升级历史"""
+        with self._session() as session:
+            rows = (
+                session.query(AlertEscalation)
+                .filter(AlertEscalation.alert_id == alert_id)
+                .order_by(AlertEscalation.escalated_at.asc())
+                .all()
+            )
+            return [r.to_dict() for r in rows]
+
+    def get_unprocessed_alerts(self, older_than_sec: int = 300) -> list[dict]:
+        """获取超过指定时间未处理的告警（用于升级调度）"""
+        with self._session() as session:
+            cutoff = datetime.now() - timedelta(seconds=older_than_sec)
+            alerts = (
+                session.query(Alert)
+                .filter(Alert.timestamp <= cutoff, Alert.level != "high")
+                .order_by(Alert.timestamp.asc())
+                .all()
+            )
+            return [a.to_dict() for a in alerts]
+
+    # ------------------------------------------------------------------ #
+    #  ROI 配置 CRUD
+    # ------------------------------------------------------------------ #
+
+    def create_roi(self, camera_id: int, name: str, roi_type: str,
+                   polygon: list, min_persons: int = 1,
+                   min_duration_sec: int = 0, alert_level: str = "high") -> dict:
+        with self._session() as session:
+            roi = CameraROI(
+                camera_id=camera_id, name=name, roi_type=roi_type,
+                polygon=polygon, min_persons=min_persons,
+                min_duration_sec=min_duration_sec, alert_level=alert_level,
+            )
+            session.add(roi)
+            session.flush()
+            return roi.to_dict()
+
+    def get_rois(self, camera_id: Optional[int] = None) -> list[dict]:
+        with self._session() as session:
+            query = session.query(CameraROI).filter(CameraROI.enabled == True)
+            if camera_id is not None:
+                query = query.filter(CameraROI.camera_id == camera_id)
+            return [r.to_dict() for r in query.all()]
+
+    def update_roi(self, roi_id: int, **kwargs) -> bool:
+        with self._session() as session:
+            roi = session.query(CameraROI).filter(CameraROI.id == roi_id).first()
+            if not roi:
+                return False
+            for k, v in kwargs.items():
+                if hasattr(roi, k):
+                    setattr(roi, k, v)
+            return True
+
+    def delete_roi(self, roi_id: int) -> bool:
+        with self._session() as session:
+            roi = session.query(CameraROI).filter(CameraROI.id == roi_id).first()
+            if not roi:
+                return False
+            session.delete(roi)
+            return True
 

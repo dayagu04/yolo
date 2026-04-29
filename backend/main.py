@@ -117,6 +117,80 @@ def _do_cleanup(save_dir: str, retention_days: int):
 
 
 # ------------------------------------------------------------------ #
+#  告警升级调度器
+# ------------------------------------------------------------------ #
+
+# 升级链配置：从低到高的升级时间阈值（秒）
+ESCALATION_CHAIN = {
+    "low": {"after_sec": 600, "to_level": "medium"},     # 10 分钟未处理 → medium
+    "medium": {"after_sec": 300, "to_level": "high"},     # 5 分钟未处理 → high
+}
+
+async def _run_escalation():
+    """定期扫描未处理告警，按升级链自动提升级别"""
+    while True:
+        await asyncio.sleep(60)  # 每分钟检查一次
+        if not db_manager:
+            continue
+
+        try:
+            now = datetime.now()
+            for from_level, rule in ESCALATION_CHAIN.items():
+                alerts = await _event_loop.run_in_executor(
+                    None,
+                    lambda fl=from_level: db_manager.get_unprocessed_alerts(
+                        older_than_sec=rule["after_sec"]
+                    ),
+                )
+                for alert in alerts:
+                    if alert.get("level") != from_level:
+                        continue
+                    alert_ts = alert.get("timestamp")
+                    if isinstance(alert_ts, str):
+                        from datetime import datetime as dt
+                        alert_ts = dt.fromisoformat(alert_ts)
+                    age_sec = (now - alert_ts).total_seconds()
+                    if age_sec < rule["after_sec"]:
+                        continue
+
+                    success = await _event_loop.run_in_executor(
+                        None,
+                        lambda a=alert: db_manager.escalate_alert(
+                            alert_id=a["id"],
+                            new_level=rule["to_level"],
+                            reason=f"超过 {rule['after_sec']}s 未处理，自动升级 {from_level}→{rule['to_level']}",
+                        ),
+                    )
+                    if success:
+                        structured_logger.log(
+                            "info", "alert.escalated",
+                            f"告警 #{alert['id']} 自动升级: {from_level}→{rule['to_level']}",
+                            data={"alert_id": alert["id"], "from": from_level, "to": rule["to_level"]},
+                        )
+                        # 推送升级通知
+                        escalation_msg = {
+                            "type": "alert",
+                            "level": rule["to_level"],
+                            "message": f"⚠️ 告警升级: #{alert['id']} {from_level}→{rule['to_level']}",
+                            "camera_id": alert.get("camera_id"),
+                            "data": {"escalation": True, "alert_id": alert["id"],
+                                     "from_level": from_level, "to_level": rule["to_level"]},
+                        }
+                        if feishu_notifier:
+                            _event_loop.call_soon_threadsafe(
+                                asyncio.create_task,
+                                feishu_notifier.send_alert(escalation_msg),
+                            )
+                        for notifier in _extra_notifiers:
+                            _event_loop.call_soon_threadsafe(
+                                asyncio.create_task,
+                                notifier.send_alert(escalation_msg),
+                            )
+        except Exception as e:
+            structured_logger.log("error", "escalation.failed", f"告警升级调度失败: {e}")
+
+
+# ------------------------------------------------------------------ #
 #  审计日志辅助函数
 # ------------------------------------------------------------------ #
 
@@ -204,6 +278,7 @@ async def lifespan(app: FastAPI):
                 print(f"[WARN] {name} 通知初始化失败: {e}")
 
     _cleanup_task = asyncio.create_task(_run_cleanup())
+    _escalation_task = asyncio.create_task(_run_escalation())
 
     cameras_cfg = config.get("cameras", [])
     if cameras_cfg:
@@ -228,12 +303,13 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
-    if _cleanup_task and not _cleanup_task.done():
-        _cleanup_task.cancel()
-        try:
-            await _cleanup_task
-        except asyncio.CancelledError:
-            pass
+    for task in [_cleanup_task, _escalation_task]:
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     structured_logger.log("info", "app.shutdown", "服务已关闭")
 
@@ -869,6 +945,31 @@ async def video_feed(camera_id: int = 0, _user: dict = Depends(get_current_user)
     )
 
 
+@app.get("/playback")
+async def playback(camera_id: int = 0, seconds: float = 10.0, _user: dict = Depends(get_current_user)):
+    """获取最近 N 秒的帧缓冲用于回放"""
+    camera = get_camera(camera_id)
+    frames = camera.get_frame_buffer(seconds)
+
+    async def generate():
+        for ts, frame in frames:
+            import cv2
+            ret, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if ret:
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n"
+                    + jpeg.tobytes()
+                    + b"\r\n"
+                )
+                await asyncio.sleep(0.033)  # ~30fps 回放
+
+    return StreamingResponse(
+        generate(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
 @app.get("/health")
 async def health():
     camera_stats = [cam.get_status() for cam in cameras.values()]
@@ -948,6 +1049,122 @@ async def system_resources(_user: dict = Depends(require_operator)):
         raise HTTPException(status_code=500, detail=f"获取系统资源失败: {e}")
 
 
+# ================================================================== #
+#  API v1 路由：告警升级
+# ================================================================== #
+
+@api_v1.get("/escalations/pending")
+async def get_pending_escalations(_user: dict = Depends(require_operator)):
+    """获取待通知的告警升级列表"""
+    if not db_manager:
+        raise HTTPException(status_code=503, detail="数据库未配置")
+    return db_manager.get_pending_escalations()
+
+
+@api_v1.post("/escalations/{escalation_id}/notify")
+async def mark_escalation_notified(escalation_id: int, _user: dict = Depends(require_operator)):
+    """标记升级已通知"""
+    if not db_manager:
+        raise HTTPException(status_code=503, detail="数据库未配置")
+    db_manager.mark_escalation_notified(escalation_id)
+    return {"status": "ok"}
+
+
+@api_v1.get("/alerts/{alert_id}/escalations")
+async def get_alert_escalations(alert_id: int, _user: dict = Depends(get_current_user)):
+    """获取指定告警的升级历史"""
+    if not db_manager:
+        raise HTTPException(status_code=503, detail="数据库未配置")
+    return db_manager.get_alert_escalations(alert_id)
+
+
+@api_v1.post("/alerts/{alert_id}/escalate")
+async def manual_escalate_alert(
+    alert_id: int, request: Request, _user: dict = Depends(require_operator),
+):
+    """手动升级告警级别"""
+    if not db_manager:
+        raise HTTPException(status_code=503, detail="数据库未配置")
+    body = await request.json()
+    new_level = body.get("level")
+    if new_level not in ("low", "medium", "high"):
+        raise HTTPException(status_code=422, detail="level 必须是 low/medium/high")
+    reason = body.get("reason", "手动升级")
+    success = db_manager.escalate_alert(alert_id, new_level, reason)
+    if not success:
+        raise HTTPException(status_code=404, detail="告警不存在或级别未变化")
+    _audit(_user["sub"], "alert_escalate", resource=f"alert:{alert_id}",
+           detail=f"升级到 {new_level}: {reason}", ip_address=_client_ip(request))
+    return {"status": "ok"}
+
+
+# ================================================================== #
+#  API v1 路由：ROI 配置
+# ================================================================== #
+
+@api_v1.get("/rois")
+async def list_rois(camera_id: Optional[int] = None, _user: dict = Depends(get_current_user)):
+    """获取 ROI 配置列表"""
+    if not db_manager:
+        raise HTTPException(status_code=503, detail="数据库未配置")
+    return db_manager.get_rois(camera_id)
+
+
+@api_v1.post("/rois")
+async def create_roi(request: Request, _user: dict = Depends(require_operator)):
+    """创建 ROI 区域"""
+    if not db_manager:
+        raise HTTPException(status_code=503, detail="数据库未配置")
+    body = await request.json()
+    required = ["camera_id", "name", "polygon"]
+    for field in required:
+        if field not in body:
+            raise HTTPException(status_code=422, detail=f"{field} 必填")
+    roi = db_manager.create_roi(
+        camera_id=body["camera_id"],
+        name=body["name"],
+        roi_type=body.get("roi_type", "intrusion"),
+        polygon=body["polygon"],
+        min_persons=body.get("min_persons", 1),
+        min_duration_sec=body.get("min_duration_sec", 0),
+        alert_level=body.get("alert_level", "high"),
+    )
+    _audit(_user["sub"], "roi_create", resource=f"camera:{body['camera_id']}",
+           detail=f"ROI: {body['name']}", ip_address=_client_ip(request))
+    return roi
+
+
+@api_v1.put("/rois/{roi_id}")
+async def update_roi(roi_id: int, request: Request, _user: dict = Depends(require_operator)):
+    """更新 ROI 配置"""
+    if not db_manager:
+        raise HTTPException(status_code=503, detail="数据库未配置")
+    body = await request.json()
+    success = db_manager.update_roi(roi_id, **body)
+    if not success:
+        raise HTTPException(status_code=404, detail="ROI 不存在")
+    _audit(_user["sub"], "roi_update", resource=f"roi:{roi_id}",
+           ip_address=_client_ip(request))
+    return {"status": "ok"}
+
+
+@api_v1.delete("/rois/{roi_id}")
+async def delete_roi(roi_id: int, request: Request, _user: dict = Depends(require_operator)):
+    """删除 ROI 区域"""
+    if not db_manager:
+        raise HTTPException(status_code=503, detail="数据库未配置")
+    success = db_manager.delete_roi(roi_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="ROI 不存在")
+    _audit(_user["sub"], "roi_delete", resource=f"roi:{roi_id}",
+           ip_address=_client_ip(request))
+    return {"status": "ok"}
+
+
+# ================================================================== #
+#  前端静态文件
+# ================================================================== #
+
 FRONTEND = ROOT / "frontend"
 
 # 静态文件服务
@@ -957,6 +1174,16 @@ app.mount("/static", StaticFiles(directory=str(FRONTEND / "static")), name="stat
 @app.get("/", response_class=HTMLResponse)
 async def root():
     return HTMLResponse((FRONTEND / "index.html").read_text(encoding="utf-8"))
+
+
+@app.get("/manifest.json")
+async def manifest():
+    return FileResponse(FRONTEND / "manifest.json", media_type="application/manifest+json")
+
+
+@app.get("/service-worker.js")
+async def service_worker():
+    return FileResponse(FRONTEND / "service-worker.js", media_type="application/javascript")
 
 
 if __name__ == "__main__":

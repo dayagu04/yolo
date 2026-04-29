@@ -3,6 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#00e5ff">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="SafeCam">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
   <title>智能安防监控</title>
   <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
   <link rel="stylesheet" href="/static/css/main.css">
@@ -23,6 +29,7 @@
     <button type="button" class="tab-btn" onclick="switchTab('alerts', this)">告警历史</button>
     <button type="button" class="tab-btn" onclick="switchTab('cameras', this)">摄像头管理</button>
     <button type="button" class="tab-btn" onclick="switchTab('users', this)">用户信息</button>
+    <button type="button" class="tab-btn" onclick="switchTab('playback', this)">录像回放</button>
   </div>
 </header>
 
@@ -134,6 +141,34 @@
   </div>
 </div>
 
+<!-- Tab: 录像回放 -->
+<div class="tab-content" id="tab-playback">
+  <div class="playback-container">
+    <div class="playback-header">
+      <h3>录像回放</h3>
+      <div class="playback-controls">
+        <select id="playback-camera" class="form-select" title="选择摄像头">
+          <option value="0">摄像头 0</option>
+        </select>
+        <select id="playback-duration" class="form-select" title="选择回放时长">
+          <option value="5">最近 5 秒</option>
+          <option value="10" selected>最近 10 秒</option>
+          <option value="30">最近 30 秒</option>
+        </select>
+        <button type="button" class="btn primary" onclick="togglePlayback()">▶ 播放</button>
+        <button type="button" class="btn" onclick="refreshPlayback()">↻ 刷新</button>
+      </div>
+    </div>
+    <div class="playback-viewport">
+      <img id="playback-img" src="" alt="回放画面">
+      <div class="playback-info">
+        <span id="playback-status">就绪</span>
+        <span id="playback-time"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Log Panel -->
 <div id="log-panel">
   <div class="log-header">
@@ -190,5 +225,24 @@
 </div>
 
 <script type="module" src="/static/js/app.js"></script>
+<script>
+  // 注册 Service Worker
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/service-worker.js')
+        .then((registration) => {
+          console.log('[App] Service Worker 注册成功:', registration.scope);
+
+          // 请求通知权限
+          if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
+          }
+        })
+        .catch((error) => {
+          console.log('[App] Service Worker 注册失败:', error);
+        });
+    });
+  }
+</script>
 </body>
 </html>

@@ -389,3 +389,33 @@ footer {
 .role-admin { background: rgba(124,77,255,0.2); color: var(--accent2); }
 .role-operator { background: rgba(0,229,255,0.15); color: var(--accent); }
 .role-viewer { background: rgba(85,85,106,0.2); color: var(--muted); }
+
+/* ── Playback ── */
+.playback-container { padding: 16px; height: 100%; display: flex; flex-direction: column; }
+.playback-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.playback-header h3 { font-size: 16px; color: var(--text); }
+.playback-controls { display: flex; gap: 8px; align-items: center; }
+.playback-controls .form-select {
+  background: var(--surface2); color: var(--text); border: 1px solid var(--border);
+  padding: 6px 10px; border-radius: var(--radius); font-size: 13px;
+}
+.playback-viewport {
+  flex: 1; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); display: flex; flex-direction: column;
+  align-items: center; justify-content: center; overflow: hidden; position: relative;
+}
+.playback-viewport img {
+  max-width: 100%; max-height: 100%; object-fit: contain;
+}
+.playback-info {
+  position: absolute; bottom: 8px; left: 0; right: 0;
+  display: flex; justify-content: space-between; padding: 0 12px;
+  font-size: 12px; color: var(--muted);
+}
+
+/* ── Escalation Badge ── */
+.escalation-badge {
+  display: inline-block; padding: 2px 8px;
+  border-radius: 10px; font-size: 11px; font-weight: 600;
+  color: #fff;
+}

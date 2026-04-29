@@ -2,6 +2,7 @@ import cv2
 import sys
 import threading
 import time
+import collections
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Generator, Callable, Union
@@ -15,6 +16,7 @@ if str(ROOT) not in sys.path:
 from backend.schemas import AlertMessage, StatusMessage, LogMessage
 from backend.tracker import PersonTracker
 from backend.screenshot import ScreenshotManager
+from backend.roi_detector import ROIDetector
 
 MODEL_PATH = Path(__file__).parent.parent / "models" / "person_best.pt"
 
@@ -41,7 +43,7 @@ class CameraManager:
         self.db_manager = db_manager
         self.redis_stats = redis_stats
 
-        # 子组件：轨迹管理 + 截图管理
+        # 子组件：轨迹管理 + 截图管理 + ROI 检测
         self.tracker = PersonTracker()
         self.screenshot_mgr = ScreenshotManager(
             camera_id=camera_id,
@@ -49,6 +51,7 @@ class CameraManager:
             root_path=ROOT,
             emit_log=self._emit_log,
         )
+        self.roi_detector = ROIDetector(db_manager=db_manager)
 
         # 摄像头 I/O 状态
         self.cap: Optional[cv2.VideoCapture] = None
@@ -70,6 +73,21 @@ class CameraManager:
         self._last_results = None
         self._alert_total = 0
         self._model = None
+
+        # 帧缓冲（用于录像回放，保留最近 300 帧 ≈ 10 秒 @30fps）
+        self._frame_buffer: collections.deque = collections.deque(maxlen=300)
+        self._buffer_lock = threading.Lock()
+
+        # 自适应跳帧
+        self._adaptive_skip = True
+        self._base_detect_every_n = 2
+        self._prev_gray: Optional[np.ndarray] = None
+        self._scene_change_threshold = 5.0  # 帧差均值阈值
+
+        # 推理缓存
+        self._inference_cache_enabled = True
+        self._last_inference_ts: float = 0.0
+        self._cache_max_age_sec: float = 0.5  # 缓存最大有效期
 
     # 向后兼容属性：main.py 直接赋值这两个字段
     @property
@@ -261,6 +279,10 @@ class CameraManager:
                 self.frame = frame.copy()
                 self.last_frame_ts = now
 
+            # 存入帧缓冲
+            with self._buffer_lock:
+                self._frame_buffer.append((now, frame.copy()))
+
             dt = now - self._last_fps_ts
             if dt > 0:
                 instant_fps = 1.0 / dt
@@ -325,17 +347,71 @@ class CameraManager:
             ).model_dump()
         )
 
+    def _emit_roi_alert(self, roi_alert: dict, frame):
+        """发送 ROI 区域告警"""
+        now_ts = time.time()
+        screenshot_path = None
+        if self.screenshot_mgr.should_save(now_ts, self._alert_total):
+            screenshot_path = self.screenshot_mgr.save(frame, now_ts)
+
+        self._alert_total += 1
+
+        if self.db_manager:
+            try:
+                self.db_manager.create_alert(
+                    camera_id=self.camera_id,
+                    person_count=roi_alert.get("person_count", 1),
+                    new_track_ids=roi_alert.get("track_ids", []),
+                    screenshot_path=screenshot_path,
+                    message=roi_alert.get("message", "ROI 告警"),
+                    level=roi_alert.get("alert_level", "high"),
+                )
+            except Exception as e:
+                self._emit_log("error", "db.insert_failed", f"ROI 告警写入失败: {e}")
+
+        self._emit(
+            AlertMessage(
+                timestamp=self._now_iso(),
+                level=roi_alert.get("alert_level", "high"),
+                message=roi_alert.get("message", "ROI 告警"),
+                camera_id=self.camera_id,
+                data={
+                    "roi_id": roi_alert.get("roi_id"),
+                    "roi_name": roi_alert.get("roi_name"),
+                    "roi_type": roi_alert.get("roi_type"),
+                    "person_count": roi_alert.get("person_count", 1),
+                    "track_ids": roi_alert.get("track_ids", []),
+                    "screenshot_path": screenshot_path,
+                },
+            ).model_dump()
+        )
+
     def _detect(self, frame):
         if self._model is None:
             return frame, 0
 
+        now_ts = time.time()
+
+        # 推理缓存：场景未变化时复用上次结果
+        if self._inference_cache_enabled and self._last_results is not None:
+            if now_ts - self._last_inference_ts < self._cache_max_age_sec:
+                if self._prev_gray is not None:
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    diff = cv2.absdiff(self._prev_gray, gray)
+                    if np.mean(diff) < self._scene_change_threshold:
+                        # 场景未变化，复用缓存
+                        return self._last_results[0].plot(), self._count_from_results(self._last_results)
+
         results = self._model(frame, verbose=False, conf=self.conf_threshold)
         self._last_results = results
+        self._last_inference_ts = now_ts
+
+        # 更新帧差参考
+        self._prev_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         boxes = results[0].boxes
         person_count = int(len(boxes)) if boxes is not None else 0
 
-        now_ts = time.time()
         bbox_list: list[tuple] = []
         if boxes is not None and person_count > 0:
             for box in boxes:
@@ -345,7 +421,44 @@ class CameraManager:
         active_track_ids = self.tracker.associate(bbox_list, now_ts)
         self._emit_alert_for_new_tracks(active_track_ids, person_count, now_ts, frame)
 
+        # ROI 区域检测
+        if bbox_list and active_track_ids:
+            roi_alerts = self.roi_detector.check_all(self.camera_id, bbox_list, active_track_ids)
+            for alert in roi_alerts:
+                self._emit_roi_alert(alert, frame)
+
         return results[0].plot(), person_count
+
+    @staticmethod
+    def _count_from_results(results) -> int:
+        boxes = results[0].boxes
+        return int(len(boxes)) if boxes is not None else 0
+
+    def _get_adaptive_detect_interval(self) -> int:
+        """根据场景变化率自适应调整检测间隔"""
+        if not self._adaptive_skip or self._prev_gray is None:
+            return self.detect_every_n
+
+        frame = self.get_frame()
+        if frame is None:
+            return self.detect_every_n
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        diff = cv2.absdiff(self._prev_gray, gray)
+        mean_diff = np.mean(diff)
+
+        if mean_diff > self._scene_change_threshold * 3:
+            return 1  # 场景剧烈变化，每帧检测
+        elif mean_diff > self._scene_change_threshold:
+            return max(1, self._base_detect_every_n // 2)
+        else:
+            return self._base_detect_every_n * 2  # 静态场景，跳更多帧
+
+    def get_frame_buffer(self, seconds: float = 10.0) -> list[tuple]:
+        """获取最近 N 秒的帧缓冲（用于录像回放）"""
+        cutoff = time.time() - seconds
+        with self._buffer_lock:
+            return [(ts, f.copy()) for ts, f in self._frame_buffer if ts >= cutoff]
 
     # ------------------------------------------------------------------ #
     #  MJPEG 流生成器

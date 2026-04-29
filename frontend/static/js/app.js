@@ -7,6 +7,7 @@ import { loadAlerts, changePage, exportCSV } from './alerts.js';
 import { addLog } from './logs.js';
 import { showCameraManagement, showAddCameraModal, hideAddCameraModal, addCamera, removeCamera } from './camera-mgmt.js';
 import { showUserManagement } from './user-mgmt.js';
+import { showPlayback, togglePlayback, refreshPlayback } from './playback.js';
 import { authFetch } from './auth.js';
 
 let footerInterval = null;
@@ -22,6 +23,8 @@ window.showAddCameraModal = showAddCameraModal;
 window.hideAddCameraModal = hideAddCameraModal;
 window.addCamera = addCamera;
 window.removeCamera = removeCamera;
+window.togglePlayback = togglePlayback;
+window.refreshPlayback = refreshPlayback;
 
 function switchTab(name, btn) {
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
@@ -35,6 +38,7 @@ function switchTab(name, btn) {
   if (name === 'alerts') loadAlerts(1);
   if (name === 'cameras') showCameraManagement();
   if (name === 'users') showUserManagement();
+  if (name === 'playback') showPlayback();
 }
 
 function openLightbox(src) {
