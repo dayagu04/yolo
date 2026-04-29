@@ -60,6 +60,7 @@ class LoginRequest(BaseModel):
 class TokenResponse(BaseModel):
     """登录成功响应"""
     access_token: str
+    refresh_token: str = ""
     token_type: str = "bearer"
     expires_in: int
     role: str

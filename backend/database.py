@@ -289,6 +289,76 @@ class DatabaseManager:
             session.flush()
             return log.id
 
+    def get_alert_stats(self, days: int = 7) -> Dict[str, any]:
+        """获取告警统计：按天、按小时、按摄像头聚合"""
+        from sqlalchemy import func, extract
+        with self._session() as session:
+            cutoff = datetime.now() - timedelta(days=days)
+
+            # 按天聚合
+            daily = session.query(
+                func.date(Alert.timestamp).label("date"),
+                func.count(Alert.id).label("count"),
+            ).filter(Alert.timestamp >= cutoff).group_by(func.date(Alert.timestamp)).all()
+
+            # 按小时聚合（最近 24 小时）
+            h24_cutoff = datetime.now() - timedelta(hours=24)
+            hourly = session.query(
+                extract("hour", Alert.timestamp).label("hour"),
+                func.count(Alert.id).label("count"),
+            ).filter(Alert.timestamp >= h24_cutoff).group_by(extract("hour", Alert.timestamp)).all()
+
+            # 按摄像头聚合
+            by_camera = session.query(
+                Alert.camera_id,
+                func.count(Alert.id).label("count"),
+            ).filter(Alert.timestamp >= cutoff).group_by(Alert.camera_id).all()
+
+            # 按级别聚合
+            by_level = session.query(
+                Alert.level,
+                func.count(Alert.id).label("count"),
+            ).filter(Alert.timestamp >= cutoff).group_by(Alert.level).all()
+
+            return {
+                "period_days": days,
+                "daily": {str(r.date): r.count for r in daily},
+                "hourly": {int(r.hour): r.count for r in hourly},
+                "by_camera": {int(r.camera_id): r.count for r in by_camera},
+                "by_level": {r.level: r.count for r in by_level},
+            }
+
+    def get_person_trend(self, camera_id: Optional[int] = None, hours: int = 24) -> list[dict]:
+        """获取人数趋势（基于告警记录中的 person_count）"""
+        from sqlalchemy import func, extract
+        with self._session() as session:
+            cutoff = datetime.now() - timedelta(hours=hours)
+            query = session.query(
+                func.date(Alert.timestamp).label("date"),
+                extract("hour", Alert.timestamp).label("hour"),
+                Alert.camera_id,
+                func.max(Alert.person_count).label("max_persons"),
+                func.avg(Alert.person_count).label("avg_persons"),
+            ).filter(Alert.timestamp >= cutoff)
+
+            if camera_id is not None:
+                query = query.filter(Alert.camera_id == camera_id)
+
+            rows = query.group_by(
+                func.date(Alert.timestamp), extract("hour", Alert.timestamp), Alert.camera_id
+            ).all()
+
+            return [
+                {
+                    "date": str(r.date),
+                    "hour": int(r.hour),
+                    "camera_id": int(r.camera_id),
+                    "max_persons": int(r.max_persons),
+                    "avg_persons": round(float(r.avg_persons), 1),
+                }
+                for r in rows
+            ]
+
     def query_audit_logs(
         self,
         limit: int = 50,

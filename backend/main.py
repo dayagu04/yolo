@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, Request, Depends, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from backend.camera import CameraManager
@@ -23,9 +24,11 @@ from backend.schemas import DetectionConfig, LoginRequest, TokenResponse, UserIn
 from backend.database import DatabaseManager
 from backend.redis_stats import RedisStats
 from backend.notifier import FeishuNotifier
+from backend.notifiers import WeChatWorkNotifier, DingTalkNotifier, EmailNotifier, WebhookNotifier
 from backend.auth import (
-    hash_password, verify_password, create_access_token,
-    get_current_user, require_operator, require_admin,
+    hash_password, verify_password, create_access_token, create_refresh_token,
+    decode_token, check_login_allowed, record_login_failure, clear_login_failures,
+    check_rate_limit, get_current_user, require_operator, require_admin,
 )
 
 # ------------------------------------------------------------------ #
@@ -41,6 +44,7 @@ db_manager: Optional[DatabaseManager] = None
 redis_stats: Optional[RedisStats] = None
 _cleanup_task: Optional[asyncio.Task] = None
 feishu_notifier: Optional[FeishuNotifier] = None
+_extra_notifiers: list = []  # 企业微信、钉钉、邮件、Webhook 等
 
 
 # ------------------------------------------------------------------ #
@@ -142,7 +146,7 @@ def _client_ip(request: Request) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _event_loop, config, db_manager, redis_stats, _cleanup_task, feishu_notifier
+    global _event_loop, config, db_manager, redis_stats, _cleanup_task, feishu_notifier, _extra_notifiers
     _event_loop = asyncio.get_running_loop()
 
     # ── 启动阶段 ──
@@ -186,6 +190,18 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"[WARN] 飞书推送初始化失败: {e}")
             feishu_notifier = None
+
+    # 4b. 初始化其他通知渠道
+    notifs_cfg = config.get("notifications", {})
+    for name, cls in [("wechat_work", WeChatWorkNotifier), ("dingtalk", DingTalkNotifier),
+                      ("email", EmailNotifier), ("webhook", WebhookNotifier)]:
+        cfg = notifs_cfg.get(name, {})
+        if cfg.get("enabled"):
+            try:
+                _extra_notifiers.append(cls(cfg))
+                print(f"{name} 通知已启用")
+            except Exception as e:
+                print(f"[WARN] {name} 通知初始化失败: {e}")
 
     _cleanup_task = asyncio.create_task(_run_cleanup())
 
@@ -283,13 +299,21 @@ def _camera_signal_callback(message: dict):
     if message.get("type") == "log":
         structured_logger._buffer.append(message)
 
-    if message.get("type") == "alert" and feishu_notifier:
+    if message.get("type") == "alert":
         screenshot_path = message.get("data", {}).get("screenshot_path")
         if _event_loop is not None and _event_loop.is_running():
-            _event_loop.call_soon_threadsafe(
-                asyncio.create_task,
-                feishu_notifier.send_alert(message, screenshot_path),
-            )
+            # 飞书推送
+            if feishu_notifier:
+                _event_loop.call_soon_threadsafe(
+                    asyncio.create_task,
+                    feishu_notifier.send_alert(message, screenshot_path),
+                )
+            # 其他通知渠道
+            for notifier in _extra_notifiers:
+                _event_loop.call_soon_threadsafe(
+                    asyncio.create_task,
+                    notifier.send_alert(message, screenshot_path),
+                )
 
     _dispatch_signal(message)
 
@@ -359,18 +383,60 @@ def get_camera(camera_id: int = 0, cam_cfg: Optional[dict] = None) -> CameraMana
 async def login(req: LoginRequest, request: Request):
     if not db_manager:
         raise HTTPException(status_code=503, detail="数据库未配置")
+
+    # 限流检查
+    check_rate_limit(request, max_requests=10, window=60)
+
+    # 登录锁定检查
+    check_login_allowed(req.username)
+
     user = db_manager.get_user_by_username(req.username)
     if not user or not verify_password(req.password, user["hashed_password"]):
+        record_login_failure(req.username)
         _audit(req.username, "login_failed", ip_address=_client_ip(request))
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     if not user.get("is_active"):
         raise HTTPException(status_code=403, detail="账号已禁用")
 
+    # 登录成功，清除失败记录
+    clear_login_failures(req.username)
+
     expire_min = config.get("auth", {}).get("access_token_expire_minutes", 60)
     token = create_access_token(user["username"], user["role"], expire_minutes=expire_min)
+    refresh = create_refresh_token(user["username"])
     _audit(req.username, "login", ip_address=_client_ip(request),
            user_agent=request.headers.get("user-agent", ""))
-    return TokenResponse(access_token=token, expires_in=expire_min * 60, role=user["role"])
+    return TokenResponse(
+        access_token=token, refresh_token=refresh,
+        expires_in=expire_min * 60, role=user["role"],
+    )
+
+
+@api_v1.post("/auth/refresh")
+async def refresh_token(request: Request):
+    """使用 refresh_token 换取新的 access_token"""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=422, detail="请求体必须是 JSON")
+
+    rt = body.get("refresh_token", "")
+    if not rt:
+        raise HTTPException(status_code=422, detail="refresh_token 必填")
+
+    try:
+        payload = decode_token(rt, expected_type="refresh")
+    except HTTPException:
+        raise HTTPException(status_code=401, detail="refresh_token 无效或已过期")
+
+    username = payload["sub"]
+    user = db_manager.get_user_by_username(username) if db_manager else None
+    if not user or not user.get("is_active"):
+        raise HTTPException(status_code=401, detail="用户不存在或已禁用")
+
+    expire_min = config.get("auth", {}).get("access_token_expire_minutes", 60)
+    new_token = create_access_token(user["username"], user["role"], expire_minutes=expire_min)
+    return {"access_token": new_token, "token_type": "bearer", "expires_in": expire_min * 60}
 
 
 @api_v1.get("/auth/me", response_model=UserInfo)
@@ -566,6 +632,87 @@ async def get_stats(_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"获取统计数据失败: {e}")
 
 
+@api_v1.post("/model/reload")
+async def reload_model(
+    request: Request,
+    camera_id: Optional[int] = Query(None),
+    model_path: Optional[str] = Query(None),
+    _user: dict = Depends(require_admin),
+):
+    """热加载 YOLO 模型（不停止摄像头线程）"""
+    results = {}
+    target_cameras = {camera_id: cameras[camera_id]} if camera_id and camera_id in cameras else cameras
+
+    for cid, cam in target_cameras.items():
+        success = cam.reload_model(model_path)
+        results[cid] = "ok" if success else "failed"
+
+    _audit(_user["sub"], "model_reload",
+           resource=f"camera:{camera_id or 'all'}",
+           detail=f"path={model_path or 'default'}, results={results}",
+           ip_address=_client_ip(request))
+    return {"results": results}
+
+
+@api_v1.get("/model/info")
+async def model_info(_user: dict = Depends(get_current_user)):
+    """获取当前模型信息"""
+    from pathlib import Path as P
+    model_file = P(MODEL_PATH) if 'MODEL_PATH' in dir() else ROOT / "models" / "person_best.pt"
+    info = {
+        "model_path": str(model_file),
+        "exists": model_file.exists(),
+        "size_mb": round(model_file.stat().st_size / 1024 / 1024, 1) if model_file.exists() else None,
+        "loaded_in_cameras": {},
+    }
+    for cid, cam in cameras.items():
+        info["loaded_in_cameras"][cid] = cam._model is not None
+    return info
+
+
+@api_v1.get("/models")
+async def list_models(_user: dict = Depends(get_current_user)):
+    """列出所有可用模型"""
+    from backend.model_manager import model_manager
+    return {
+        "loaded": model_manager.list_models(),
+        "available": model_manager.scan_available(),
+    }
+
+
+@api_v1.post("/models/{name}/load")
+async def load_model(name: str, request: Request, _user: dict = Depends(require_admin)):
+    """加载指定模型"""
+    from backend.model_manager import model_manager
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    path = body.get("path", f"models/{name}.pt")
+    device = body.get("device", "cpu")
+
+    success = model_manager.load_model(name, path, device)
+    if not success:
+        raise HTTPException(status_code=500, detail=f"模型 '{name}' 加载失败")
+
+    _audit(_user["sub"], "model_load", resource=name, detail=f"path={path}, device={device}",
+           ip_address=_client_ip(request))
+    return {"status": "ok", "models": model_manager.list_models()}
+
+
+@api_v1.post("/models/{name}/unload")
+async def unload_model(name: str, request: Request, _user: dict = Depends(require_admin)):
+    """卸载指定模型"""
+    from backend.model_manager import model_manager
+    success = model_manager.unload_model(name)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"模型 '{name}' 未加载")
+
+    _audit(_user["sub"], "model_unload", resource=name, ip_address=_client_ip(request))
+    return {"status": "ok", "models": model_manager.list_models()}
+
+
 @api_v1.post("/cleanup")
 async def manual_cleanup(request: Request, _user: dict = Depends(require_admin)):
     """手动触发截图和数据库清理"""
@@ -596,6 +743,35 @@ async def manual_cleanup(request: Request, _user: dict = Depends(require_admin))
 # ================================================================== #
 #  API v1 路由：审计日志查询
 # ================================================================== #
+
+@api_v1.get("/stats/trend")
+async def get_alert_trend(
+    days: int = Query(7, ge=1, le=90),
+    _user: dict = Depends(get_current_user),
+):
+    """获取告警趋势统计（按天/小时/摄像头/级别）"""
+    if not db_manager:
+        raise HTTPException(status_code=503, detail="数据库未配置")
+    try:
+        return db_manager.get_alert_stats(days=days)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询失败: {e}")
+
+
+@api_v1.get("/stats/person-trend")
+async def get_person_trend(
+    camera_id: Optional[int] = Query(None),
+    hours: int = Query(24, ge=1, le=168),
+    _user: dict = Depends(get_current_user),
+):
+    """获取人数趋势（按小时聚合）"""
+    if not db_manager:
+        raise HTTPException(status_code=503, detail="数据库未配置")
+    try:
+        return {"trend": db_manager.get_person_trend(camera_id=camera_id, hours=hours)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询失败: {e}")
+
 
 @api_v1.get("/audit-logs")
 async def get_audit_logs(
@@ -727,7 +903,55 @@ async def health():
     }
 
 
+# ------------------------------------------------------------------ #
+#  Prometheus 指标
+# ------------------------------------------------------------------ #
+
+@app.get("/metrics")
+async def prometheus_metrics():
+    from backend.metrics import collect_metrics
+    return HTMLResponse(
+        content=collect_metrics(cameras, db_manager, redis_stats, START_TS),
+        media_type="text/plain; charset=utf-8",
+    )
+
+
+# ------------------------------------------------------------------ #
+#  系统资源 API
+# ------------------------------------------------------------------ #
+
+@api_v1.get("/system/resources")
+async def system_resources(_user: dict = Depends(require_operator)):
+    """获取系统资源使用情况"""
+    import psutil
+    try:
+        cpu = psutil.cpu_percent(interval=0.1)
+        mem = psutil.virtual_memory()
+        disk = psutil.disk_usage("/")
+        result = {
+            "cpu_percent": cpu,
+            "memory": {"used_mb": mem.used // 1024 // 1024, "total_mb": mem.total // 1024 // 1024, "percent": mem.percent},
+            "disk": {"used_gb": round(disk.used / 1024**3, 1), "total_gb": round(disk.total / 1024**3, 1), "percent": disk.percent},
+        }
+        try:
+            import torch
+            if torch.cuda.is_available():
+                result["gpu"] = {
+                    "name": torch.cuda.get_device_name(0),
+                    "memory_used_mb": torch.cuda.memory_allocated() // 1024 // 1024,
+                    "memory_total_mb": torch.cuda.get_device_properties(0).total_mem // 1024 // 1024,
+                }
+        except Exception:
+            pass
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取系统资源失败: {e}")
+
+
 FRONTEND = ROOT / "frontend"
+
+# 静态文件服务
+app.mount("/static", StaticFiles(directory=str(FRONTEND / "static")), name="static")
 
 
 @app.get("/", response_class=HTMLResponse)

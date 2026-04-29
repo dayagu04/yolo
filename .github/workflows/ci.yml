@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      - run: ruff check backend/ --select E,F,W --ignore E501
+      - run: ruff format backend/ --check --diff
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test_password
+          MYSQL_DATABASE: security_monitor
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Run unit tests
+        env:
+          YOLO_DATABASE_PASSWORD: test_password
+          YOLO_AUTH_SECRET_KEY: test_secret_key_for_ci_only_32bytes!!
+          YOLO_AUTH_INIT_ADMIN_PASSWORD: test_admin_pass
+          CONFIG_FILE: config.test.yaml
+        run: pytest test/ -m "unit or api" --tb=short -q --timeout=60
+      - name: Run coverage
+        env:
+          YOLO_DATABASE_PASSWORD: test_password
+          YOLO_AUTH_SECRET_KEY: test_secret_key_for_ci_only_32bytes!!
+          YOLO_AUTH_INIT_ADMIN_PASSWORD: test_admin_pass
+          CONFIG_FILE: config.test.yaml
+        run: pytest test/ -m "unit" --cov=backend --cov-report=term-missing --tb=short -q --timeout=60 || true
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t safecam:${{ github.sha }} .
+      - name: Verify image
+        run: docker image inspect safecam:${{ github.sha }}

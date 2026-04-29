@@ -135,6 +135,23 @@ class CameraManager:
             self._model = None
             self._emit_log("error", "model.load_failed", f"YOLO 模型加载失败: {e}")
 
+    def reload_model(self, model_path: Optional[str] = None):
+        """热加载模型权重（不停止摄像头线程）"""
+        old_model = self._model
+        self._model = None
+        try:
+            from ultralytics import YOLO
+            path = model_path or str(MODEL_PATH)
+            self._model = YOLO(path)
+            if self.device != "cpu":
+                self._model.to(self.device)
+            self._emit_log("info", "model.reloaded", f"模型热加载成功: {path}")
+            return True
+        except Exception as e:
+            self._model = old_model  # 回滚到旧模型
+            self._emit_log("error", "model.reload_failed", f"模型热加载失败: {e}")
+            return False
+
     # ------------------------------------------------------------------ #
     #  摄像头生命周期
     # ------------------------------------------------------------------ #
