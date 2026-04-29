@@ -28,6 +28,9 @@ class Alert(Base):
     screenshot_path = Column(String(512))
     message = Column(String(512))
     level = Column(Enum("low", "medium", "high"), default="high", index=True)
+    acknowledged = Column(Boolean, default=False)
+    acknowledged_by = Column(String(50))
+    acknowledged_at = Column(DateTime(timezone=True))
     created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> dict:
@@ -40,6 +43,9 @@ class Alert(Base):
             "screenshot_path": self.screenshot_path,
             "message": self.message,
             "level": self.level,
+            "acknowledged": self.acknowledged,
+            "acknowledged_by": self.acknowledged_by,
+            "acknowledged_at": self.acknowledged_at.isoformat() if self.acknowledged_at else None,
         }
 
 
@@ -282,6 +288,16 @@ class DatabaseManager:
             alert = session.query(Alert).filter(Alert.id == alert_id).first()
             return alert.to_dict() if alert else None
 
+    def acknowledge_alert(self, alert_id: int, username: str) -> bool:
+        with self._session() as session:
+            alert = session.query(Alert).filter(Alert.id == alert_id).first()
+            if not alert or alert.acknowledged:
+                return False
+            alert.acknowledged = True
+            alert.acknowledged_by = username
+            alert.acknowledged_at = datetime.now()
+            return True
+
     def delete_old_alerts(self, days: int = 30) -> int:
         with self._session() as session:
             cutoff = datetime.now() - timedelta(days=days)
@@ -322,6 +338,37 @@ class DatabaseManager:
         """检查是否存在任意用户（用于首次启动初始化判断）。"""
         with self._session() as session:
             return session.query(User).count() > 0
+
+    def list_users(self) -> list[dict]:
+        with self._session() as session:
+            users = session.query(User).order_by(User.id).all()
+            return [u.to_dict() for u in users]
+
+    def update_user(self, user_id: int, **kwargs) -> bool:
+        with self._session() as session:
+            user = session.query(User).filter(User.id == user_id).first()
+            if not user:
+                return False
+            for k, v in kwargs.items():
+                if hasattr(user, k) and k not in ("id", "created_at"):
+                    setattr(user, k, v)
+            return True
+
+    def delete_user(self, user_id: int) -> bool:
+        with self._session() as session:
+            user = session.query(User).filter(User.id == user_id).first()
+            if not user:
+                return False
+            session.delete(user)
+            return True
+
+    def update_password(self, user_id: int, hashed_password: str) -> bool:
+        with self._session() as session:
+            user = session.query(User).filter(User.id == user_id).first()
+            if not user:
+                return False
+            user.hashed_password = hashed_password
+            return True
 
     # ------------------------------------------------------------------ #
     #  审计日志 CRUD

@@ -3,11 +3,13 @@ import { checkAuth, showLogin, doLogin } from './auth.js';
 import { connectWS, onMessage } from './websocket.js';
 import { loadCameras, flashAlertBanner, updateCamStatus, updateCamStats, getCameras } from './camera-grid.js';
 import { startStatsPolling, stopStatsPolling } from './stats.js';
-import { loadAlerts, changePage, exportCSV } from './alerts.js';
+import { loadAlerts, changePage, exportCSV, acknowledgeAlert } from './alerts.js';
 import { addLog } from './logs.js';
-import { showCameraManagement, showAddCameraModal, hideAddCameraModal, addCamera, removeCamera } from './camera-mgmt.js';
-import { showUserManagement } from './user-mgmt.js';
+import { showCameraManagement, showAddCameraModal, hideAddCameraModal, addCamera, removeCamera, editCamera } from './camera-mgmt.js';
+import { showUserManagement, showAddUserModal, hideAddUserModal, addUser, changeUserRole, toggleUserActive, deleteUser, showChangePassword, submitChangePassword } from './user-mgmt.js';
 import { showPlayback, togglePlayback, refreshPlayback } from './playback.js';
+import { showAuditLogs } from './audit-logs.js';
+import { showNotificationSettings } from './notifications.js';
 import { authFetch } from './auth.js';
 
 let footerInterval = null;
@@ -23,8 +25,18 @@ window.showAddCameraModal = showAddCameraModal;
 window.hideAddCameraModal = hideAddCameraModal;
 window.addCamera = addCamera;
 window.removeCamera = removeCamera;
+window.editCamera = editCamera;
 window.togglePlayback = togglePlayback;
 window.refreshPlayback = refreshPlayback;
+window.acknowledgeAlert = acknowledgeAlert;
+window.showAddUserModal = showAddUserModal;
+window.hideAddUserModal = hideAddUserModal;
+window.addUser = addUser;
+window.changeUserRole = changeUserRole;
+window.toggleUserActive = toggleUserActive;
+window.deleteUser = deleteUser;
+window.showChangePassword = showChangePassword;
+window.submitChangePassword = submitChangePassword;
 
 function switchTab(name, btn) {
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
@@ -39,6 +51,8 @@ function switchTab(name, btn) {
   if (name === 'cameras') showCameraManagement();
   if (name === 'users') showUserManagement();
   if (name === 'playback') showPlayback();
+  if (name === 'audit-logs') showAuditLogs();
+  if (name === 'notifications') showNotificationSettings();
 }
 
 function openLightbox(src) {

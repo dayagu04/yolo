@@ -419,3 +419,80 @@ footer {
   border-radius: 10px; font-size: 11px; font-weight: 600;
   color: #fff;
 }
+
+/* ── Action Badge ── */
+.action-badge {
+  display: inline-block; padding: 1px 6px;
+  border-radius: 4px; font-size: 11px;
+  background: rgba(0,229,255,0.1); color: var(--accent);
+}
+.action-cell { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.btn-sm { padding: 2px 8px; font-size: 11px; }
+.btn-sm.danger { color: var(--danger); }
+.form-select-sm, .form-input-sm {
+  background: var(--surface2); color: var(--text); border: 1px solid var(--border);
+  padding: 4px 8px; border-radius: var(--radius); font-size: 12px;
+}
+.detail-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.table-wrap { overflow-x: auto; }
+
+/* ── Notification Cards ── */
+.notification-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px; padding: 16px;
+}
+.notification-card {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px;
+  transition: border-color 0.2s;
+}
+.notification-card.enabled { border-color: var(--accent); }
+.notification-card.disabled { opacity: 0.6; }
+.notif-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.notif-icon { font-size: 20px; }
+.notif-name { flex: 1; font-weight: 600; font-size: 14px; }
+.notif-details { font-size: 12px; color: var(--muted); }
+.notif-url { margin-top: 4px; word-break: break-all; }
+.notif-disabled-hint { margin-top: 8px; color: var(--warn); }
+.notification-note { padding: 16px; font-size: 12px; color: var(--muted); }
+
+/* ── Toggle Switch ── */
+.toggle-switch {
+  position: relative; display: inline-block; width: 40px; height: 22px;
+}
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+  position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--border); border-radius: 22px; transition: 0.3s;
+}
+.toggle-slider::before {
+  content: ''; position: absolute; height: 16px; width: 16px;
+  left: 3px; bottom: 3px; background: var(--text); border-radius: 50%; transition: 0.3s;
+}
+.toggle-switch input:checked + .toggle-slider { background: var(--accent); }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(18px); }
+
+/* ── Toolbar ── */
+.mgmt-toolbar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+}
+.stat-card.inline {
+  display: inline-flex; gap: 8px; align-items: center;
+  padding: 6px 12px; font-size: 13px;
+}
+
+/* ── ROI Canvas ── */
+.roi-canvas-container {
+  position: relative; display: inline-block; border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden;
+}
+.roi-canvas-container canvas { display: block; cursor: crosshair; }
+.roi-toolbar { padding: 8px; display: flex; gap: 8px; align-items: center; }
+.roi-list { margin-top: 12px; }
+.roi-item {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  background: var(--surface2); border-radius: var(--radius); margin-bottom: 4px;
+  font-size: 13px;
+}
+.roi-item .roi-color { width: 12px; height: 12px; border-radius: 2px; }

@@ -33,14 +33,17 @@ function renderAlertTable(rows, total, page) {
   const tbody = document.getElementById('alert-tbody');
   if (!tbody) return;
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty-row">暂无数据</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-row">暂无数据</td></tr>';
   } else {
     tbody.innerHTML = rows.map(r => {
       const levelBadge = `<span class="level-badge level-${r.level}">${{high:'高',medium:'中',low:'低'}[r.level] || r.level}</span>`;
       const thumb = r.screenshot_path
         ? `<img class="thumb" src="/api/v1/alerts/${r.id}/screenshot" onclick="openLightbox('/api/v1/alerts/${r.id}/screenshot')" loading="lazy">`
         : '<span class="muted-text">—</span>';
-      return `<tr><td>${r.id}</td><td>${r.created_at || r.timestamp || ''}</td><td>${r.camera_id}</td><td>${r.person_count}</td><td>${r.message || ''}</td><td>${levelBadge}</td><td>${thumb}</td></tr>`;
+      const ackBadge = r.acknowledged
+        ? `<span class="status-badge status-online" title="由 ${r.acknowledged_by} 确认于 ${r.acknowledged_at || ''}">已确认</span>`
+        : `<button class="btn btn-sm" onclick="acknowledgeAlert(${r.id})">确认</button>`;
+      return `<tr><td>${r.id}</td><td>${r.created_at || r.timestamp || ''}</td><td>${r.camera_id}</td><td>${r.person_count}</td><td>${r.message || ''}</td><td>${levelBadge}</td><td>${ackBadge}</td><td>${thumb}</td></tr>`;
     }).join('');
   }
 
@@ -52,10 +55,24 @@ function renderAlertTable(rows, total, page) {
 
 export function changePage(delta) { loadAlerts(alertPage + delta); }
 
+export async function acknowledgeAlert(alertId) {
+  try {
+    const res = await authFetch(`/api/v1/alerts/${alertId}/acknowledge`, { method: 'POST' });
+    if (!res.ok) {
+      const data = await res.json();
+      alert(data.detail || '确认失败');
+      return;
+    }
+    await loadAlerts(alertPage);
+  } catch (e) {
+    alert('网络错误');
+  }
+}
+
 export function exportCSV() {
   if (!alertData.length) { alert('请先查询数据'); return; }
-  const headers = ['ID','时间','摄像头','人数','消息','级别'];
-  const rows = alertData.map(r => [r.id, r.created_at || r.timestamp, r.camera_id, r.person_count, `"${(r.message||'').replace(/"/g,'""')}"`, r.level]);
+  const headers = ['ID','时间','摄像头','人数','消息','级别','已确认'];
+  const rows = alertData.map(r => [r.id, r.created_at || r.timestamp, r.camera_id, r.person_count, `"${(r.message||'').replace(/"/g,'""')}"`, r.level, r.acknowledged ? '是' : '否']);
   const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);

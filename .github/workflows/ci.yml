@@ -40,7 +40,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r requirements.txt
+      - run: pip install -r requirements.txt pytest-cov
       - name: Run unit tests
         env:
           YOLO_DATABASE_PASSWORD: test_password
@@ -54,7 +54,13 @@ jobs:
           YOLO_AUTH_SECRET_KEY: test_secret_key_for_ci_only_32bytes!!
           YOLO_AUTH_INIT_ADMIN_PASSWORD: test_admin_pass
           CONFIG_FILE: config.test.yaml
-        run: pytest test/ -m "unit" --cov=backend --cov-report=term-missing --tb=short -q --timeout=60 || true
+        run: pytest test/ -m "unit" --cov=backend --cov-report=term-missing --cov-report=xml --tb=short -q --timeout=60 || true
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
 
   build:
     runs-on: ubuntu-latest
@@ -62,7 +68,17 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
       - name: Build Docker image
-        run: docker build -t safecam:${{ github.sha }} .
+        run: docker build -t safecam:${{ github.sha }} -t safecam:latest .
       - name: Verify image
         run: docker image inspect safecam:${{ github.sha }}
+      - name: Save image as artifact
+        run: docker save safecam:latest | gzip > safecam-image.tar.gz
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: safecam-image.tar.gz
+          retention-days: 7

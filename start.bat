@@ -11,5 +11,5 @@ if exist .env (
     exit /b 1
 )
 
-echo Starting YOLO Security Monitor on port 9000...
-uvicorn backend.main:app --host 0.0.0.0 --port 9000
+echo Starting YOLO Security Monitor on port 8000...
+uvicorn backend.main:app --host 0.0.0.0 --port 8000

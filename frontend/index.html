@@ -28,8 +28,10 @@
     <button type="button" class="tab-btn" onclick="switchTab('stats', this)">统计面板</button>
     <button type="button" class="tab-btn" onclick="switchTab('alerts', this)">告警历史</button>
     <button type="button" class="tab-btn" onclick="switchTab('cameras', this)">摄像头管理</button>
-    <button type="button" class="tab-btn" onclick="switchTab('users', this)">用户信息</button>
+    <button type="button" class="tab-btn" onclick="switchTab('users', this)">用户管理</button>
     <button type="button" class="tab-btn" onclick="switchTab('playback', this)">录像回放</button>
+    <button type="button" class="tab-btn" onclick="switchTab('audit-logs', this)">审计日志</button>
+    <button type="button" class="tab-btn" onclick="switchTab('notifications', this)">通知设置</button>
   </div>
 </header>
 
@@ -101,7 +103,7 @@
     <div class="alert-table-wrap">
       <table>
         <thead>
-          <tr><th>ID</th><th>时间</th><th>摄像头</th><th>人数</th><th>消息</th><th>级别</th><th>截图</th></tr>
+          <tr><th>ID</th><th>时间</th><th>摄像头</th><th>人数</th><th>消息</th><th>级别</th><th>操作</th><th>截图</th></tr>
         </thead>
         <tbody id="alert-tbody">
           <tr><td colspan="7" class="empty-row">点击查询加载数据</td></tr>
@@ -169,6 +171,30 @@
   </div>
 </div>
 
+<!-- Tab: 审计日志 -->
+<div class="tab-content" id="tab-audit-logs">
+  <div class="mgmt-panel">
+    <div class="mgmt-header">
+      <h3>审计日志</h3>
+    </div>
+    <div id="audit-log-content">
+      <div class="empty-row">切换到此标签页加载数据</div>
+    </div>
+  </div>
+</div>
+
+<!-- Tab: 通知设置 -->
+<div class="tab-content" id="tab-notifications">
+  <div class="mgmt-panel">
+    <div class="mgmt-header">
+      <h3>通知设置</h3>
+    </div>
+    <div id="notification-content">
+      <div class="empty-row">切换到此标签页加载数据</div>
+    </div>
+  </div>
+</div>
+
 <!-- Log Panel -->
 <div id="log-panel">
   <div class="log-header">
@@ -214,6 +240,34 @@
     <div class="modal-actions">
       <button type="button" class="btn" onclick="hideAddCameraModal()">取消</button>
       <button type="button" class="btn primary" onclick="addCamera()">添加</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Camera Modal -->
+<div class="modal-overlay" id="edit-camera-modal">
+  <div class="modal-box">
+    <h3>编辑摄像头</h3>
+    <input type="hidden" id="edit-cam-id">
+    <label>名称</label>
+    <input type="text" id="edit-cam-name" placeholder="摄像头名称">
+    <label>位置</label>
+    <input type="text" id="edit-cam-location" placeholder="安装位置">
+    <div class="modal-error" id="edit-cam-error"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn" onclick="hideEditCameraModal()">取消</button>
+      <button type="button" class="btn primary" onclick="submitEditCamera()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ROI Modal -->
+<div class="modal-overlay" id="roi-modal">
+  <div class="modal-box" style="max-width:750px">
+    <h3>ROI 区域绘制</h3>
+    <div id="roi-tool-container"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn" onclick="hideROIModal()">关闭</button>
     </div>
   </div>
 </div>
