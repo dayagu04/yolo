@@ -3,11 +3,14 @@ Prometheus 指标模块
 暴露 /metrics 端点，提供系统运行指标
 """
 import time
+import logging
 import psutil
 from typing import Optional
 
+logger = logging.getLogger(__name__)
 
-def collect_metrics(cameras: dict, db_manager=None, redis_stats=None, start_ts: float = 0) -> str:
+
+def collect_metrics(cameras: dict, db_manager=None, redis_stats=None, start_ts: float = 0, ws_clients: int = 0) -> str:
     """收集系统指标，返回 Prometheus 文本格式"""
     lines = []
     now = time.time()
@@ -45,7 +48,7 @@ def collect_metrics(cameras: dict, db_manager=None, redis_stats=None, start_ts: 
 
     lines.append("# HELP safecam_ws_clients Connected WebSocket clients")
     lines.append("# TYPE safecam_ws_clients gauge")
-    # ws_clients 由 main.py 传入
+    lines.append(f"safecam_ws_clients {ws_clients}")
 
     # ── 系统资源 ──
     try:
@@ -67,8 +70,8 @@ def collect_metrics(cameras: dict, db_manager=None, redis_stats=None, start_ts: 
         lines.append("# HELP safecam_memory_usage_percent Memory usage percentage")
         lines.append("# TYPE safecam_memory_usage_percent gauge")
         lines.append(f"safecam_memory_usage_percent {mem.percent}")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"系统资源指标采集失败: {e}")
 
     # ── GPU 指标（可选）──
     try:
@@ -82,7 +85,7 @@ def collect_metrics(cameras: dict, db_manager=None, redis_stats=None, start_ts: 
             lines.append("# HELP safecam_gpu_memory_total_bytes Total GPU memory in bytes")
             lines.append("# TYPE safecam_gpu_memory_total_bytes gauge")
             lines.append(f"safecam_gpu_memory_total_bytes {gpu_mem_total}")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"GPU 指标采集失败: {e}")
 
     return "\n".join(lines) + "\n"

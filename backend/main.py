@@ -494,7 +494,7 @@ async def health():
 @app.get("/metrics")
 async def prometheus_metrics():
     from backend.metrics import collect_metrics
-    return HTMLResponse(content=collect_metrics(cameras, db_manager, redis_stats, START_TS),
+    return HTMLResponse(content=collect_metrics(cameras, db_manager, redis_stats, START_TS, ws_clients=len(_ws_clients)),
                         media_type="text/plain; charset=utf-8")
 
 

@@ -1,8 +1,11 @@
 """共享依赖：通过 app.state 访问全局对象"""
+import logging
 from fastapi import Request, HTTPException
 from backend.database import DatabaseManager
 from backend.redis_stats import RedisStats
 from backend.logging_system import StructuredLogger
+
+_logger = logging.getLogger(__name__)
 
 
 def get_db(request: Request) -> DatabaseManager:
@@ -51,5 +54,5 @@ def audit(request, username: str, action: str, resource: str = "", detail: str =
                 detail=detail, ip_address=ip,
                 user_agent=request.headers.get("user-agent", ""),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            _logger.debug(f"审计日志写入失败: {e}")
