@@ -3,17 +3,17 @@
 提供告警记录的持久化存储
 """
 from sqlalchemy import (
-    create_engine, Column, Integer, String, DateTime, Text, Enum, JSON, TIMESTAMP, Boolean, text
+    create_engine, Column, Integer, String, DateTime, Text, Enum, JSON, TIMESTAMP, Boolean, text, ForeignKey, Index
 )
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import sessionmaker, Session, DeclarativeBase
 from sqlalchemy.pool import QueuePool
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict
 from contextlib import contextmanager
 import logging
 
-Base = declarative_base()
+class Base(DeclarativeBase):
+    pass
 
 
 class Alert(Base):
@@ -22,7 +22,7 @@ class Alert(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
-    camera_id = Column(Integer, nullable=False, index=True)
+    camera_id = Column(Integer, ForeignKey("cameras.id", ondelete="SET NULL"), nullable=True, index=True)
     person_count = Column(Integer, nullable=False)
     new_track_ids = Column(JSON)
     screenshot_path = Column(String(512))
@@ -56,7 +56,7 @@ class Camera(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(100), nullable=False)
     location = Column(String(200))
-    status = Column(Enum("online", "offline", "error"), default="offline")
+    status = Column(Enum("online", "offline", "error"), default="offline", index=True)
     last_seen = Column(DateTime)
     resolution = Column(String(20))
     created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc))
@@ -108,12 +108,12 @@ class AlertEscalation(Base):
     __tablename__ = "alert_escalations"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    alert_id = Column(Integer, nullable=False, index=True)  # 关联 alerts.id
+    alert_id = Column(Integer, ForeignKey("alerts.id", ondelete="CASCADE"), nullable=False, index=True)
     from_level = Column(String(20), nullable=False)  # 原始告警级别
     to_level = Column(String(20), nullable=False)     # 升级后级别
     reason = Column(String(500))                       # 升级原因
     escalated_at = Column(DateTime(timezone=True), nullable=False)
-    notified = Column(Boolean, default=False)          # 是否已通知
+    notified = Column(Boolean, default=False, index=True)  # 是否已通知
     notified_at = Column(DateTime(timezone=True))      # 通知时间
     created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc))
 
@@ -135,7 +135,7 @@ class CameraROI(Base):
     __tablename__ = "camera_rois"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    camera_id = Column(Integer, nullable=False, index=True)
+    camera_id = Column(Integer, ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(100), nullable=False)          # 区域名称
     roi_type = Column(
         Enum("intrusion", "loitering", "gathering", "monitoring"),
@@ -145,7 +145,7 @@ class CameraROI(Base):
     min_persons = Column(Integer, default=1)             # 触发最小人数
     min_duration_sec = Column(Integer, default=0)        # 最小持续时间（徘徊检测用）
     alert_level = Column(Enum("low", "medium", "high"), default="high")
-    enabled = Column(Boolean, default=True)
+    enabled = Column(Boolean, default=True, index=True)
     created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
