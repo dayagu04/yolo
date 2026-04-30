@@ -196,6 +196,12 @@ async def lifespan(app: FastAPI):
     try:
         config = load_and_validate_config(ROOT / config_file)
         print(f"已加载配置文件: {config_file}")
+
+        # CORS — 在 config 加载后设置（修复时序 Bug）
+        _cors_origins = config.get("auth", {}).get("cors_origins", ["http://localhost:8000", "http://127.0.0.1:8000"])
+        app.add_middleware(CORSMiddleware, allow_origins=_cors_origins, allow_credentials=True,
+                           allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+                           allow_headers=["Authorization", "Content-Type"])
     except ConfigError as e:
         print(f"\n[ERROR] 配置校验失败: {e}\n")
         raise SystemExit(1)
@@ -287,11 +293,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="智能视频监控", lifespan=lifespan)
-
-# CORS
-_cors_origins = config.get("auth", {}).get("cors_origins", ["http://localhost:8000", "http://127.0.0.1:8000"])
-app.add_middleware(CORSMiddleware, allow_origins=_cors_origins, allow_credentials=True,
-                   allow_methods=["*"], allow_headers=["*"])
 
 
 # ------------------------------------------------------------------ #
@@ -493,7 +494,7 @@ async def health():
 @app.get("/metrics")
 async def prometheus_metrics():
     from backend.metrics import collect_metrics
-    return HTMLResponse(content=collect_metrics(cameras, db_manager, redis_stats, START_TS),
+    return HTMLResponse(content=collect_metrics(cameras, db_manager, redis_stats, START_TS, ws_clients=len(_ws_clients)),
                         media_type="text/plain; charset=utf-8")
 
 

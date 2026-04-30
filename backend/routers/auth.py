@@ -29,7 +29,7 @@ async def login(req: LoginRequest, request: Request):
 
     clear_login_failures(req.username)
     expire_min = config.get("auth", {}).get("access_token_expire_minutes", 60)
-    token = create_access_token(user["username"], user["role"], expire_minutes=expire_min)
+    token = create_access_token(user["username"], user["role"], expire_minutes=expire_min, user_id=user["id"])
     refresh = create_refresh_token(user["username"])
     audit(request, req.username, "login")
     return TokenResponse(
@@ -62,7 +62,7 @@ async def refresh_token(request: Request):
         raise HTTPException(status_code=401, detail="用户不存在或已禁用")
 
     expire_min = config.get("auth", {}).get("access_token_expire_minutes", 60)
-    new_token = create_access_token(user["username"], user["role"], expire_minutes=expire_min)
+    new_token = create_access_token(user["username"], user["role"], expire_minutes=expire_min, user_id=user["id"])
     return {"access_token": new_token, "token_type": "bearer", "expires_in": expire_min * 60}
 
 

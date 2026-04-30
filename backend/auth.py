@@ -109,9 +109,9 @@ def check_rate_limit(request: Request, max_requests: int = _DEFAULT_RATE, window
 #  Token 工具
 # ------------------------------------------------------------------ #
 
-def create_access_token(username: str, role: str, expire_minutes: int = 60) -> str:
+def create_access_token(username: str, role: str, expire_minutes: int = 60, user_id: int = 0) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=expire_minutes)
-    payload = {"sub": username, "role": role, "exp": expire, "type": "access"}
+    payload = {"sub": username, "role": role, "id": user_id, "exp": expire, "type": "access"}
     return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
 
 

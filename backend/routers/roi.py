@@ -37,10 +37,15 @@ async def create_roi(request: Request, _user: dict = Depends(require_operator)):
 async def update_roi(roi_id: int, request: Request, _user: dict = Depends(require_operator)):
     db = get_db(request)
     body = await request.json()
-    success = db.update_roi(roi_id, **body)
+    # 白名单：只允许更新安全字段，防止覆写 id/camera_id/created_at 等
+    _ALLOWED_FIELDS = {"name", "roi_type", "polygon", "min_persons", "min_duration_sec", "alert_level", "enabled"}
+    updates = {k: v for k, v in body.items() if k in _ALLOWED_FIELDS}
+    if not updates:
+        raise HTTPException(status_code=422, detail="无有效更新字段")
+    success = db.update_roi(roi_id, **updates)
     if not success:
         raise HTTPException(status_code=404, detail="ROI 不存在")
-    audit(request, _user["sub"], "roi_update", resource=f"roi:{roi_id}")
+    audit(request, _user["sub"], "roi_update", resource=f"roi:{roi_id}", detail=str(updates))
     return {"status": "ok"}
 
 
