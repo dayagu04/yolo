@@ -1,5 +1,6 @@
 // ── 告警历史模块 ──
 import { authFetch } from './auth.js';
+import { toastError, toastWarn } from './toast.js';
 
 let alertPage = 1;
 const ALERT_PAGE_SIZE = 20;
@@ -60,17 +61,17 @@ export async function acknowledgeAlert(alertId) {
     const res = await authFetch(`/api/v1/alerts/${alertId}/acknowledge`, { method: 'POST' });
     if (!res.ok) {
       const data = await res.json();
-      alert(data.detail || '确认失败');
+      toastError(data.detail || '确认失败');
       return;
     }
     await loadAlerts(alertPage);
   } catch (e) {
-    alert('网络错误');
+    toastError('网络错误');
   }
 }
 
 export function exportCSV() {
-  if (!alertData.length) { alert('请先查询数据'); return; }
+  if (!alertData.length) { toastWarn('请先查询数据'); return; }
   const headers = ['ID','时间','摄像头','人数','消息','级别','已确认'];
   const rows = alertData.map(r => [r.id, r.created_at || r.timestamp, r.camera_id, r.person_count, `"${(r.message||'').replace(/"/g,'""')}"`, r.level, r.acknowledged ? '是' : '否']);
   const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');

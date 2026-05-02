@@ -11,6 +11,8 @@ from backend.auth import create_access_token, hash_password
 from backend.routers.auth import auth_router
 from backend.routers.roi import roi_router
 from backend.routers.system import system_router
+from backend.routers.alert import alert_router
+from backend.routers.camera import camera_router
 
 
 # ── Fixtures ──
@@ -35,6 +37,21 @@ def db_mock():
     db.delete_roi.return_value = True
     db.query_audit_logs.return_value = []
     db.create_audit_log.return_value = None
+    # alert router mocks
+    db.query_alerts.return_value = {"alerts": [{"id": 1, "camera_id": 0, "level": "high", "message": "test"}], "total": 1}
+    db.get_alert_by_id.return_value = {"id": 1, "screenshot_path": None}
+    db.acknowledge_alert.return_value = True
+    db.get_pending_escalations.return_value = []
+    db.mark_escalation_notified.return_value = None
+    db.get_alert_escalations.return_value = []
+    db.escalate_alert.return_value = True
+    db.get_alert_stats.return_value = []
+    db.get_person_trend.return_value = []
+    # camera router mocks
+    db.get_user_by_username.return_value = {
+        "id": 1, "username": "admin", "role": "admin",
+        "hashed_password": hash_password("admin123"), "is_active": True,
+    }
     return db
 
 
@@ -55,11 +72,14 @@ def app(db_mock, config):
     app.include_router(auth_router)
     app.include_router(roi_router)
     app.include_router(system_router)
+    app.include_router(alert_router)
+    app.include_router(camera_router)
     app.state.db_manager = db_mock
     app.state.config = config
     app.state.redis_stats = None
     app.state.cameras = {}
     app.state.structured_logger = None
+    app.state.event_loop = None
     return app
 
 
@@ -299,3 +319,195 @@ class TestSystemRouter:
             assert res.json()["enabled"] is False
             assert config["notifications"]["feishu"]["enabled"] is False
             assert mock_feishu.enabled is False
+
+
+# ── Alert Router Tests ──
+
+class TestAlertRouter:
+    def test_get_alerts(self, client, db_mock):
+        res = client.get("/api/v1/alerts", headers=auth_header())
+        assert res.status_code == 200
+        data = res.json()
+        assert "alerts" in data
+        assert data["total"] == 1
+
+    def test_get_alerts_with_filters(self, client, db_mock):
+        res = client.get("/api/v1/alerts?camera_id=0&level=high&limit=10&offset=0",
+                         headers=auth_header())
+        assert res.status_code == 200
+        call_kwargs = db_mock.query_alerts.call_args[1]
+        assert call_kwargs["camera_id"] == 0
+        assert call_kwargs["level"] == "high"
+        assert call_kwargs["limit"] == 10
+
+    def test_get_alerts_time_filter(self, client, db_mock):
+        res = client.get("/api/v1/alerts?start_time=2024-01-01T00:00:00&end_time=2024-12-31T23:59:59",
+                         headers=auth_header())
+        assert res.status_code == 200
+        call_kwargs = db_mock.query_alerts.call_args[1]
+        assert call_kwargs["start_time"] is not None
+        assert call_kwargs["end_time"] is not None
+
+    def test_get_alerts_invalid_time(self, client, db_mock):
+        db_mock.query_alerts.side_effect = ValueError("bad format")
+        res = client.get("/api/v1/alerts?start_time=not-a-date", headers=auth_header())
+        assert res.status_code == 422
+        db_mock.query_alerts.side_effect = None
+
+    def test_get_alerts_unauthorized(self, client):
+        res = client.get("/api/v1/alerts")
+        assert res.status_code == 401
+
+    def test_acknowledge_alert(self, client):
+        res = client.post("/api/v1/alerts/1/acknowledge", headers=auth_header())
+        assert res.status_code == 200
+        assert res.json()["status"] == "ok"
+
+    def test_acknowledge_alert_not_found(self, client, db_mock):
+        db_mock.acknowledge_alert.return_value = False
+        res = client.post("/api/v1/alerts/999/acknowledge", headers=auth_header())
+        assert res.status_code == 404
+
+    def test_get_alert_screenshot_not_found(self, client, db_mock):
+        db_mock.get_alert_by_id.return_value = None
+        res = client.get("/api/v1/alerts/1/screenshot", headers=auth_header())
+        assert res.status_code == 404
+
+    def test_get_alert_screenshot_no_path(self, client, db_mock):
+        db_mock.get_alert_by_id.return_value = {"id": 1, "screenshot_path": None}
+        res = client.get("/api/v1/alerts/1/screenshot", headers=auth_header())
+        assert res.status_code == 404
+
+    def test_get_pending_escalations(self, client, db_mock):
+        db_mock.get_pending_escalations.return_value = [{"id": 1, "alert_id": 1}]
+        res = client.get("/api/v1/escalations/pending", headers=auth_header())
+        assert res.status_code == 200
+        assert len(res.json()) == 1
+
+    def test_mark_escalation_notified(self, client):
+        res = client.post("/api/v1/escalations/1/notify", headers=auth_header())
+        assert res.status_code == 200
+
+    def test_get_alert_escalations(self, client):
+        res = client.get("/api/v1/alerts/1/escalations", headers=auth_header())
+        assert res.status_code == 200
+
+    def test_manual_escalate_alert(self, client):
+        res = client.post("/api/v1/alerts/1/escalate", headers=auth_header(),
+                          json={"level": "high", "reason": "手动升级"})
+        assert res.status_code == 200
+
+    def test_manual_escalate_invalid_level(self, client):
+        res = client.post("/api/v1/alerts/1/escalate", headers=auth_header(),
+                          json={"level": "critical"})
+        assert res.status_code == 422
+
+    def test_manual_escalate_not_found(self, client, db_mock):
+        db_mock.escalate_alert.return_value = False
+        res = client.post("/api/v1/alerts/999/escalate", headers=auth_header(),
+                          json={"level": "high"})
+        assert res.status_code == 404
+
+    def test_get_logs(self, client):
+        res = client.get("/api/v1/logs", headers=auth_header())
+        assert res.status_code == 200
+        assert "logs" in res.json()
+
+    def test_get_logs_no_logger(self, client):
+        res = client.get("/api/v1/logs", headers=auth_header())
+        assert res.status_code == 200
+
+    def test_get_stats_no_redis(self, client):
+        res = client.get("/api/v1/stats", headers=auth_header())
+        assert res.status_code == 503
+
+    def test_get_alert_trend(self, client):
+        res = client.get("/api/v1/stats/trend", headers=auth_header())
+        assert res.status_code == 200
+
+    def test_get_person_trend(self, client):
+        res = client.get("/api/v1/stats/person-trend", headers=auth_header())
+        assert res.status_code == 200
+
+
+# ── Camera Router Tests ──
+
+class TestCameraRouter:
+    def test_list_cameras_empty(self, client):
+        res = client.get("/api/v1/cameras", headers=auth_header())
+        assert res.status_code == 200
+        assert res.json()["total"] == 0
+
+    def test_list_cameras_with_config(self, client, config):
+        config["cameras"] = [{"id": 0, "name": "CAM0", "source": "0", "location": "大厅"}]
+        res = client.get("/api/v1/cameras", headers=auth_header())
+        assert res.status_code == 200
+        data = res.json()
+        assert data["total"] == 1
+        assert data["cameras"][0]["name"] == "CAM0"
+        assert data["cameras"][0]["connected"] is False
+
+    def test_list_cameras_with_running_cam(self, client, config, app):
+        config["cameras"] = [{"id": 0, "name": "CAM0", "source": "0"}]
+        mock_cam = MagicMock()
+        mock_cam.get_status.return_value = {
+            "camera_id": 0, "connected": True, "running": True,
+            "model_loaded": True, "fps": 25.0, "active_tracks": 3,
+            "alert_total": 5, "detection_enabled": True, "conf_threshold": 0.5,
+            "last_frame_age_ms": 100, "reconnect_attempts": 0, "resolution": "1280x720",
+        }
+        app.state.cameras = {0: mock_cam}
+        res = client.get("/api/v1/cameras", headers=auth_header())
+        assert res.status_code == 200
+        cam = res.json()["cameras"][0]
+        assert cam["connected"] is True
+        assert cam["fps"] == 25.0
+
+    def test_list_cameras_unauthorized(self, client):
+        res = client.get("/api/v1/cameras")
+        assert res.status_code == 401
+
+    def test_add_camera_missing_source(self, client):
+        res = client.post("/api/v1/cameras/1/add", headers=auth_header(),
+                          json={"name": "test"})
+        assert res.status_code == 422
+
+    def test_add_camera_invalid_json(self, client):
+        res = client.post("/api/v1/cameras/1/add",
+                          headers={**auth_header(), "Content-Type": "text/plain"},
+                          content=b"not json")
+        assert res.status_code == 422
+
+    def test_edit_camera(self, client, app):
+        mock_cam = MagicMock()
+        app.state.cameras = {0: mock_cam}
+        res = client.put("/api/v1/cameras/0", headers=auth_header(),
+                         json={"name": "新名称", "location": "新位置"})
+        assert res.status_code == 200
+        assert res.json()["status"] == "ok"
+
+    def test_edit_camera_not_found(self, client):
+        res = client.put("/api/v1/cameras/999", headers=auth_header(),
+                         json={"name": "x"})
+        assert res.status_code == 404
+
+    def test_remove_camera(self, client, app):
+        mock_cam = MagicMock()
+        app.state.cameras = {0: mock_cam}
+        res = client.post("/api/v1/cameras/0/remove", headers=auth_header())
+        assert res.status_code == 200
+        assert res.json()["success"] is True
+        mock_cam.stop.assert_called_once()
+
+    def test_remove_camera_not_found(self, client):
+        res = client.post("/api/v1/cameras/999/remove", headers=auth_header())
+        assert res.status_code == 404
+
+    def test_camera_status(self, client, app):
+        mock_cam = MagicMock()
+        mock_cam.get_status.return_value = {"camera_id": 0, "connected": True}
+        app.state.cameras = {0: mock_cam}
+        with patch("backend.routers.camera._get_or_create_camera", return_value=mock_cam):
+            res = client.get("/api/v1/camera/0/status", headers=auth_header())
+        assert res.status_code == 200
+        assert res.json()["connected"] is True

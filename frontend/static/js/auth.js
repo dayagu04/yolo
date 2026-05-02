@@ -1,4 +1,5 @@
 // ── 认证模块 ──
+import { toastError } from './toast.js';
 let authToken = localStorage.getItem('auth_token') || '';
 
 export function setToken(token) {
@@ -27,6 +28,14 @@ export async function authFetch(url, options = {}) {
     setToken('');
     showLogin('登录已过期，请重新登录');
     throw new Error('unauthorized');
+  }
+  if (!res.ok && res.status !== 404) {
+    try {
+      const data = await res.clone().json();
+      toastError(data.detail || `请求失败 (${res.status})`);
+    } catch (_) {
+      toastError(`请求失败 (${res.status})`);
+    }
   }
   return res;
 }

@@ -1,10 +1,11 @@
 // ── SafeCam Service Worker ──
-const CACHE_NAME = 'safecam-v2';
+const CACHE_NAME = 'safecam-v3';
 const STATIC_ASSETS = [
   '/',
   '/static/css/main.css',
   '/static/js/app.js',
   '/static/js/auth.js',
+  '/static/js/toast.js',
   '/static/js/websocket.js',
   '/static/js/camera-grid.js',
   '/static/js/stats.js',
@@ -13,6 +14,9 @@ const STATIC_ASSETS = [
   '/static/js/camera-mgmt.js',
   '/static/js/user-mgmt.js',
   '/static/js/playback.js',
+  '/static/js/audit-logs.js',
+  '/static/js/notifications.js',
+  '/static/js/roi-draw.js',
   '/manifest.json',
 ];
 
@@ -41,42 +45,55 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// 请求拦截：网络优先，缓存回退
+// 请求拦截：静态资源缓存优先，HTML/API 网络优先
 self.addEventListener('fetch', (event) => {
   const { request } = event;
 
-  // 跳过非 GET 请求和 API 请求
+  // 跳过非 GET 请求和 API/视频流请求
   if (request.method !== 'GET') return;
   if (request.url.includes('/api/') || request.url.includes('/video_feed') || request.url.includes('/playback')) {
     return;
   }
 
-  event.respondWith(
-    fetch(request)
-      .then((response) => {
-        // 成功则更新缓存
-        if (response && response.status === 200) {
-          const responseClone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(request, responseClone);
+  const isStatic = request.url.includes('/static/') || request.url.endsWith('.json');
+
+  if (isStatic) {
+    // 静态资源：缓存优先，后台更新
+    event.respondWith(
+      caches.match(request).then((cached) => {
+        const fetchPromise = fetch(request).then((response) => {
+          if (response && response.status === 200) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          }
+          return response;
+        }).catch(() => cached);
+
+        return cached || fetchPromise;
+      })
+    );
+  } else {
+    // HTML 页面：网络优先，缓存回退
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response && response.status === 200) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          }
+          return response;
+        })
+        .catch(() => {
+          return caches.match(request).then((cached) => {
+            if (cached) return cached;
+            if (request.headers.get('accept')?.includes('text/html')) {
+              return caches.match('/');
+            }
+            return new Response('离线模式', { status: 503, statusText: 'Service Unavailable' });
           });
-        }
-        return response;
-      })
-      .catch(() => {
-        // 网络失败则从缓存读取
-        return caches.match(request).then((cachedResponse) => {
-          if (cachedResponse) {
-            return cachedResponse;
-          }
-          // 如果是页面请求，返回离线页面
-          if (request.headers.get('accept')?.includes('text/html')) {
-            return caches.match('/');
-          }
-          return new Response('离线模式', { status: 503, statusText: 'Service Unavailable' });
-        });
-      })
-  );
+        })
+    );
+  }
 });
 
 // 推送通知事件
