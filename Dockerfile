@@ -18,6 +18,10 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 # ============================================================
 FROM python:3.11-slim
 
+LABEL maintainer="safecam" \
+      description="SafeCam 智能安防监控系统" \
+      version="2.0"
+
 WORKDIR /app
 
 # 仅安装运行时系统依赖

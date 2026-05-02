@@ -18,9 +18,20 @@ jobs:
       - run: ruff check backend/ --select E,F,W --ignore E501
       - run: ruff format backend/ --check --diff
 
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pip-audit
+      - name: Audit dependencies for known vulnerabilities
+        run: pip-audit -r requirements.txt --strict || true
+
   test:
     runs-on: ubuntu-latest
-    needs: lint
+    needs: [lint, security]
     services:
       mysql:
         image: mysql:8.0
@@ -54,7 +65,7 @@ jobs:
           YOLO_AUTH_SECRET_KEY: test_secret_key_for_ci_only_32bytes!!
           YOLO_AUTH_INIT_ADMIN_PASSWORD: test_admin_pass
           CONFIG_FILE: config.test.yaml
-        run: pytest test/ -m "unit" --cov=backend --cov-report=term-missing --cov-report=xml --tb=short -q --timeout=60 || true
+        run: pytest test/ -m "unit" --cov=backend --cov-report=term-missing --cov-report=xml --cov-fail-under=30 --tb=short -q --timeout=60
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4

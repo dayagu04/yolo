@@ -1,5 +1,6 @@
 // ── 通知设置模块 ──
 import { authFetch } from './auth.js';
+import { toastError, toastSuccess } from './toast.js';
 
 export async function showNotificationSettings() {
   const wrap = document.getElementById('notification-content');
@@ -64,12 +65,13 @@ export async function toggleNotification(channel, enabled) {
     });
     if (!res.ok) {
       const data = await res.json();
-      alert(data.detail || '操作失败');
+      toastError(data.detail || '操作失败');
       return;
     }
+    toastSuccess('通知设置已更新');
     await showNotificationSettings();
   } catch (e) {
-    alert('网络错误');
+    toastError('网络错误');
   }
 }
 

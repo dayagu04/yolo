@@ -1,5 +1,6 @@
 // ── ROI 绘制工具 ──
 import { authFetch } from './auth.js';
+import { toastError, toastWarn, toastSuccess } from './toast.js';
 
 let canvas, ctx;
 let currentPolygon = [];
@@ -191,12 +192,12 @@ export function roiClearCurrent() {
 
 export async function roiSave() {
   if (currentPolygon.length < 3) {
-    alert('至少需要 3 个点形成区域');
+    toastWarn('至少需要 3 个点形成区域');
     return;
   }
   const name = document.getElementById('roi-name-input')?.value?.trim();
   if (!name) {
-    alert('请输入区域名称');
+    toastWarn('请输入区域名称');
     return;
   }
   const roiType = document.getElementById('roi-type-select')?.value || 'intrusion';
@@ -214,14 +215,15 @@ export async function roiSave() {
     });
     if (!res.ok) {
       const data = await res.json();
-      alert(data.detail || '保存失败');
+      toastError(data.detail || '保存失败');
       return;
     }
+    toastSuccess('ROI 区域已保存');
     currentPolygon = [];
     document.getElementById('roi-name-input').value = '';
     await loadROIs();
   } catch (e) {
-    alert('网络错误');
+    toastError('网络错误');
   }
 }
 

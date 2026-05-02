@@ -478,6 +478,18 @@ async def health():
     cams_ok = all(s["connected"] and s["model_loaded"] for s in camera_stats) if camera_stats else True
     status = "ok" if (cams_ok and (db_manager is None or db_ok)) else "degraded"
 
+    # 脱敏：只暴露必要的摄像头摘要，隐藏内部配置
+    cameras_summary = [
+        {
+            "camera_id": s["camera_id"],
+            "connected": s["connected"],
+            "fps": s["fps"],
+            "active_tracks": s["active_tracks"],
+            "alert_total": s["alert_total"],
+        }
+        for s in camera_stats
+    ]
+
     return {
         "status": status, "timestamp": structured_logger._iso_now(),
         "uptime_sec": int(time.time() - START_TS), "ws_clients": len(_ws_clients),
@@ -487,7 +499,7 @@ async def health():
             "redis": "ok" if redis_ok else ("disabled" if not (redis_stats and redis_stats.is_enabled()) else "error"),
             "model": "ok" if model_ok else ("not_loaded" if camera_stats else "no_camera"),
         },
-        "cameras": camera_stats,
+        "cameras": cameras_summary,
     }
 
 
