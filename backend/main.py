@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import sys
 import time
@@ -160,7 +161,7 @@ def _audit(username: str, action: str, resource: str = "", detail: str = "",
             db_manager.create_audit_log(username=username, action=action, resource=resource,
                                         detail=detail, ip_address=ip_address, user_agent=user_agent)
         except Exception as e:
-            pass
+            logging.getLogger(__name__).debug(f"审计日志写入失败: {e}")
 
 
 def _client_ip(request: Request) -> str:
@@ -251,6 +252,7 @@ async def lifespan(app: FastAPI):
 
     # 存入 app.state 供 routers 使用
     app.state.config = config
+    app.state.config_file = str(ROOT / config_file)
     app.state.db_manager = db_manager
     app.state.redis_stats = redis_stats
     app.state.cameras = cameras
@@ -530,7 +532,7 @@ async def service_worker():
 
 
 if __name__ == "__main__":
-    import logging
+
     logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
     srv_cfg = config.get("server", {}) if config else {}
     print("启动监控服务器 -> http://localhost:8000")

@@ -33,6 +33,7 @@ class ConfigManager:
     REQUIRED_FIELDS = {
         "database.host": str,
         "database.user": str,
+        "database.password": str,
         "database.database": str,
     }
 

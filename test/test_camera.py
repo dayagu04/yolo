@@ -6,7 +6,7 @@ import requests
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).parent.parent.parent
+ROOT = Path(__file__).parent.parent
 
 
 @pytest.mark.camera

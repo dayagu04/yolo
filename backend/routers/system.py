@@ -123,7 +123,7 @@ async def toggle_notification(channel: str, request: Request, _user: dict = Depe
                    "email": EmailNotifier, "webhook": WebhookNotifier}
         # 移除旧的同类 notifier
         _extra_notifiers[:] = [n for n in _extra_notifiers if not isinstance(n, cls_map.get(channel, type(None)))]
-        if enabled and ch_cfg.get("webhook_url") or ch_cfg.get("smtp_host"):
+        if enabled and (ch_cfg.get("webhook_url") or ch_cfg.get("smtp_host")):
             try:
                 _extra_notifiers.append(cls_map[channel](ch_cfg))
             except Exception as e:

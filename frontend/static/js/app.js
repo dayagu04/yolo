@@ -16,7 +16,7 @@ let footerInterval = null;
 
 // 暴露全局函数供 HTML onclick 使用
 window.switchTab = switchTab;
-window.doLogin = doLogin;
+window.doLogin = async () => { const ok = await doLogin(); if (ok) { await bootstrapApp(); } };
 window.changePage = changePage;
 window.exportCSV = exportCSV;
 window.openLightbox = openLightbox;

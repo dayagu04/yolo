@@ -3,10 +3,11 @@
 提供告警记录的持久化存储
 """
 from sqlalchemy import (
-    create_engine, Column, Integer, String, DateTime, Text, Enum, JSON, TIMESTAMP, Boolean, text, ForeignKey, Index
+    create_engine, Column, Integer, String, DateTime, Text, Enum, JSON, TIMESTAMP, Boolean, text, ForeignKey, Index, func
 )
 from sqlalchemy.orm import sessionmaker, Session, DeclarativeBase
 from sqlalchemy.pool import QueuePool
+from sqlalchemy import extract
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict
 from contextlib import contextmanager
@@ -240,7 +241,7 @@ class DatabaseManager:
     ) -> int:
         with self._session() as session:
             alert = Alert(
-                timestamp=datetime.now(),
+                timestamp=datetime.now(timezone.utc),
                 camera_id=camera_id,
                 person_count=person_count,
                 new_track_ids=new_track_ids or [],
@@ -295,7 +296,7 @@ class DatabaseManager:
                 return False
             alert.acknowledged = True
             alert.acknowledged_by = username
-            alert.acknowledged_at = datetime.now()
+            alert.acknowledged_at = datetime.now(timezone.utc)
             return True
 
     def delete_old_alerts(self, days: int = 30) -> int:
@@ -385,7 +386,7 @@ class DatabaseManager:
     ) -> int:
         with self._session() as session:
             log = AuditLog(
-                timestamp=datetime.now(),
+                timestamp=datetime.now(timezone.utc),
                 username=username,
                 action=action,
                 resource=resource,
@@ -399,7 +400,6 @@ class DatabaseManager:
 
     def get_alert_stats(self, days: int = 7) -> Dict[str, any]:
         """获取告警统计：按天、按小时、按摄像头聚合"""
-        from sqlalchemy import func, extract
         with self._session() as session:
             cutoff = datetime.now() - timedelta(days=days)
 
@@ -438,7 +438,6 @@ class DatabaseManager:
 
     def get_person_trend(self, camera_id: Optional[int] = None, hours: int = 24) -> list[dict]:
         """获取人数趋势（基于告警记录中的 person_count）"""
-        from sqlalchemy import func, extract
         with self._session() as session:
             cutoff = datetime.now() - timedelta(hours=hours)
             query = session.query(
@@ -511,7 +510,7 @@ class DatabaseManager:
                 from_level=from_level,
                 to_level=to_level,
                 reason=reason,
-                escalated_at=datetime.now(),
+                escalated_at=datetime.now(timezone.utc),
             )
             session.add(esc)
             session.flush()
@@ -534,7 +533,7 @@ class DatabaseManager:
             esc = session.query(AlertEscalation).filter(AlertEscalation.id == escalation_id).first()
             if esc:
                 esc.notified = True
-                esc.notified_at = datetime.now()
+                esc.notified_at = datetime.now(timezone.utc)
 
     def escalate_alert(self, alert_id: int, new_level: str, reason: str = "") -> bool:
         """升级告警级别并记录升级历史"""
@@ -549,7 +548,7 @@ class DatabaseManager:
                 from_level=old_level,
                 to_level=new_level,
                 reason=reason,
-                escalated_at=datetime.now(),
+                escalated_at=datetime.now(timezone.utc),
             )
             session.add(esc)
             return True

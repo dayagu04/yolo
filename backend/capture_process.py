@@ -85,7 +85,7 @@ def _capture_loop(
     cap = cv2.VideoCapture(source) if is_rtsp else cv2.VideoCapture(int(source), cv2.CAP_DSHOW)
 
     if not cap.isOpened():
-        print(f"[CAM {self.camera_id}] 无法打开摄像头: {source}")
+        print(f"[CAM {camera_id}] 无法打开摄像头: {source}")
         shm.close()
         return
 
@@ -96,7 +96,7 @@ def _capture_loop(
     for _ in range(5):
         cap.read()
 
-    print(f"[CAM {self.camera_id}] 采集进程已启动 ({width}x{height})")
+    print(f"[CAM {camera_id}] 采集进程已启动 ({width}x{height})")
 
     max_delay = 60
     base_delay = 1
@@ -108,7 +108,7 @@ def _capture_loop(
             cap.release()
             reconnect_attempts += 1
             delay = min(base_delay * (2 ** (reconnect_attempts - 1)), max_delay)
-            print(f"[CAM {self.camera_id}] 读取失败，{delay}s 后重连 (第 {reconnect_attempts} 次)")
+            print(f"[CAM {camera_id}] 读取失败，{delay}s 后重连 (第 {reconnect_attempts} 次)")
             time.sleep(delay)
             # 重连
             cap = cv2.VideoCapture(source) if is_rtsp else cv2.VideoCapture(int(source), cv2.CAP_DSHOW)
@@ -128,4 +128,4 @@ def _capture_loop(
 
     cap.release()
     shm.close()
-    print(f"[CAM {self.camera_id}] 采集进程已停止")
+    print(f"[CAM {camera_id}] 采集进程已停止")
