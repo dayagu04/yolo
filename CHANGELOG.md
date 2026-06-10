@@ -5,6 +5,22 @@
 ## [Unreleased]
 
 ### Added
+- **SECURITY.md**：安全规范与最佳实践文档
+- **BUGFIX_REPORT.md**：Bug 修复记录与待办事项
+
+### Fixed
+- **[CRITICAL] SQL 注入风险**（`scripts/init_database.py`）：将 f-string SQL 拼接改为参数化查询
+- **[CRITICAL] Redis KEYS 命令性能问题**（`backend/redis_stats.py`）：使用 SCAN 游标替代 KEYS 命令，避免生产环境阻塞
+- **[MAJOR] 布尔值比较规范**（`backend/database.py`）：修正 SQLAlchemy 布尔值比较，使用 `.is_(True/False)`
+- **[MAJOR] 共享内存资源泄漏**（`backend/capture_process.py`）：改进异常处理，确保 `shm.unlink()` 总是执行
+- **[MAJOR] 时区感知问题**（`backend/database.py`）：`delete_old_alerts` 使用 UTC 时区避免夏令时问题
+
+### Changed
+- README.md 添加安全章节和文档索引
+
+## [2.0.0] - 2024-12
+
+### Added
 - 完整单元测试套件（103 个测试），覆盖 auth、roi_detector、notifiers、routers、schemas、metrics、model_manager、capture_process
 - Alembic 迁移 005：外键约束和缺失索引
 - MIT LICENSE 文件
@@ -46,10 +62,6 @@
 - AlertEscalation.alert_id 添加外键约束 → alerts.id (ON DELETE CASCADE)
 - CameraROI.camera_id 添加外键约束 → cameras.id (ON DELETE CASCADE)
 - 新增索引：cameras.status、alert_escalations.notified、camera_rois.enabled
-
-## [2.0.0] - 2024-12
-
-### Added
 - 多进程摄像头采集（SharedMemory）
 - 告警升级链（low→medium→high）
 - ROI 区域检测（入侵/徘徊/聚集）

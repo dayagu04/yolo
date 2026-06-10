@@ -301,7 +301,7 @@ class DatabaseManager:
 
     def delete_old_alerts(self, days: int = 30) -> int:
         with self._session() as session:
-            cutoff = datetime.now() - timedelta(days=days)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
             count = session.query(Alert).filter(Alert.timestamp < cutoff).delete()
             self.logger.info(f"已删除 {count} 条过期告警记录（{days} 天前）")
             return count
@@ -521,7 +521,7 @@ class DatabaseManager:
         with self._session() as session:
             rows = (
                 session.query(AlertEscalation)
-                .filter(AlertEscalation.notified == False)
+                .filter(AlertEscalation.notified.is_(False))
                 .order_by(AlertEscalation.escalated_at.asc())
                 .limit(limit)
                 .all()
@@ -595,7 +595,7 @@ class DatabaseManager:
 
     def get_rois(self, camera_id: Optional[int] = None) -> list[dict]:
         with self._session() as session:
-            query = session.query(CameraROI).filter(CameraROI.enabled == True)
+            query = session.query(CameraROI).filter(CameraROI.enabled.is_(True))
             if camera_id is not None:
                 query = query.filter(CameraROI.camera_id == camera_id)
             return [r.to_dict() for r in query.all()]

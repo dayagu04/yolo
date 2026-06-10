@@ -111,12 +111,17 @@ class RedisStats:
         if not self.is_enabled():
             return {}
         try:
-            keys = self.client.keys("stats:today:cam:*")
+            # 使用 SCAN 代替 KEYS 避免阻塞 Redis
             result = {}
-            for key in keys:
-                camera_id = key.split(":")[-1]
-                count = self.client.get(key)
-                result[camera_id] = int(count) if count else 0
+            cursor = 0
+            while True:
+                cursor, keys = self.client.scan(cursor, match="stats:today:cam:*", count=100)
+                for key in keys:
+                    camera_id = key.decode('utf-8').split(":")[-1] if isinstance(key, bytes) else key.split(":")[-1]
+                    count = self.client.get(key)
+                    result[camera_id] = int(count) if count else 0
+                if cursor == 0:
+                    break
             return result
         except Exception as e:
             self.logger.error(f"Redis 获取所有摄像头告警数失败: {e}")
@@ -232,9 +237,16 @@ class RedisStats:
         try:
             # 删除今日统计
             self.client.delete("stats:today:alerts")
-            keys = self.client.keys("stats:today:cam:*")
-            if keys:
-                self.client.delete(*keys)
+            # 使用 SCAN 代替 KEYS 避免阻塞 Redis
+            cursor = 0
+            keys_to_delete = []
+            while True:
+                cursor, keys = self.client.scan(cursor, match="stats:today:cam:*", count=100)
+                keys_to_delete.extend(keys)
+                if cursor == 0:
+                    break
+            if keys_to_delete:
+                self.client.delete(*keys_to_delete)
 
             # 删除昨天的小时统计
             yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")

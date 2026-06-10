@@ -406,9 +406,30 @@ system:
 4. 推送到分支 (`git push origin feature/AmazingFeature`)
 5. 创建 Pull Request
 
+详细的开发规范请查看 [AGENTS.md](AGENTS.md)。
+
+## 🔒 安全
+
+安全性是本项目的重要关注点。如发现安全漏洞，请查看 [SECURITY.md](SECURITY.md) 了解报告流程和最佳实践。
+
+主要安全特性：
+- JWT 认证 + Token 刷新机制
+- 登录失败锁定与速率限制
+- SQL 注入防护（参数化查询）
+- 敏感配置环境变量注入
+- 审计日志记录
+
 ## 📄 许可证
 
 本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情
+
+## 📚 相关文档
+
+- [CHANGELOG.md](CHANGELOG.md) - 版本变更记录
+- [QUICKSTART.md](QUICKSTART.md) - 快速命令参考
+- [AGENTS.md](AGENTS.md) - 开发规范与架构说明
+- [SECURITY.md](SECURITY.md) - 安全规范与最佳实践
+- [BUGFIX_REPORT.md](BUGFIX_REPORT.md) - Bug 修复记录
 
 ## 🙏 致谢
 

@@ -43,15 +43,19 @@ def create_database(config: dict):
 
     try:
         with engine.connect() as conn:
-            # 检查数据库是否存在
+            # 检查数据库是否存在（使用参数化查询防止 SQL 注入）
             result = conn.execute(
-                text(f"SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '{db_name}'")
+                text("SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = :db_name"),
+                {"db_name": db_name}
             )
             exists = result.fetchone() is not None
 
             if not exists:
                 print(f"创建数据库: {db_name}")
-                conn.execute(text(f"CREATE DATABASE {db_name} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"))
+                # 注意：CREATE DATABASE 不支持参数化，需验证 db_name 格式
+                if not db_name.replace("_", "").isalnum():
+                    raise ValueError(f"数据库名称包含非法字符: {db_name}")
+                conn.execute(text(f"CREATE DATABASE `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"))
                 conn.commit()
                 print(f"✓ 数据库 {db_name} 创建成功")
             else:

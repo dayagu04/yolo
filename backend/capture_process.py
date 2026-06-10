@@ -62,9 +62,17 @@ class CaptureProcess:
         if self._process and self._process.is_alive():
             self._process.join(timeout=3)
         if self._shm:
-            self._shm.close()
-            self._shm.unlink()
-            self._shm = None
+            try:
+                self._shm.close()
+            except Exception:
+                pass  # 忽略 close 失败
+            finally:
+                try:
+                    self._shm.unlink()
+                except Exception:
+                    pass  # 忽略 unlink 失败，可能已被清理
+                finally:
+                    self._shm = None
 
     @property
     def is_alive(self) -> bool:
