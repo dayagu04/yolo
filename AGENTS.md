@@ -35,7 +35,7 @@ backend/          # FastAPI 后端
   logging_system.py   # 结构化日志
 frontend/         # 原生前端 SPA
   index.html      # 入口
-  static/js/      # 13 个 ES Module（app.js 为主入口）
+  static/js/      # 14 个 ES Module（app.js 为主入口）
   static/css/     # 样式
 test/             # pytest 测试套件
 alembic/          # 数据库迁移脚本

@@ -9,6 +9,27 @@
 - Alembic 迁移 005：外键约束和缺失索引
 - MIT LICENSE 文件
 - CHANGELOG 文件
+- **bin/ 目录**：统一管理可执行脚本
+  - `bin/start.sh` - Linux/Mac 启动脚本
+  - `bin/dev.sh` - 开发模式启动脚本（热重载）
+  - `bin/jupyter.sh` - Jupyter Notebook 启动脚本
+  - `bin/start.bat` - Windows 启动脚本（从根目录移入）
+- **扩展的 Makefile**：提供 start、dev、test、init-db、jupyter、docker-up/down、lint、clean 等命令
+
+### Changed
+- 更新 README.md 文档，使其与实际代码同步：
+  - 前端模块数量从 9 个更新为 14 个
+  - 补充完整的项目结构图（包含 bin/、routers/ 目录和所有后端模块）
+  - 扩展 API 端点列表，包含用户管理、系统管理等核心接口
+  - 更新 config.yaml 示例，包含所有关键配置项
+  - 更新数据库迁移文件列表（006 个迁移文件）
+  - 更新快速开始章节，添加多种启动方式说明
+- 更新 AGENTS.md 前端模块数量为 14 个
+- **规范化项目目录结构**：
+  - 移动 `start.bat` 到 `bin/start.bat`
+  - 改进 `bin/start.bat` 环境变量加载逻辑
+  - 扩展 Makefile 从单一 Jupyter 启动改为完整的任务管理工具
+- 清理项目：恢复 md/ 文档子仓库
 
 ### Fixed
 - CORS 中间件时序 Bug：config 在 import 时为空，导致生产域名从未生效

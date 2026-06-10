@@ -1,3 +1,4 @@
 [submodule "md"]
 	path = md
 	url = git@github.com:dayagu04/md.git
+	branch = yolo

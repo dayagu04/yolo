@@ -35,11 +35,17 @@
 - 审计日志
 
 ### 前端功能
-- ES 模块化架构（9 个功能模块）
+- ES 模块化架构（14 个功能模块）
 - 实时视频流显示
 - 告警历史查询与导出
 - 统计面板（ECharts 图表）
 - 录像回放
+- 用户管理界面
+- 摄像头动态管理
+- ROI 区域绘制工具
+- 审计日志查看
+- 通知渠道配置
+- 实时日志面板
 - PWA 离线支持
 
 ## 🗺️ 版本演进
@@ -71,6 +77,11 @@
 
 ```text
 yolo/
+├── bin/                        # 可执行脚本
+│   ├── start.sh               # Linux/Mac 启动脚本
+│   ├── start.bat              # Windows 启动脚本
+│   ├── dev.sh                 # 开发模式（热重载）
+│   └── jupyter.sh             # Jupyter Notebook
 ├── backend/                    # FastAPI 后端服务
 │   ├── main.py                # 路由定义与生命周期管理
 │   ├── camera.py              # 摄像头管理与检测逻辑
@@ -82,43 +93,79 @@ yolo/
 │   ├── config.py              # 配置加载
 │   ├── metrics.py             # Prometheus 指标
 │   ├── model_manager.py       # 多模型管理
+│   ├── logging_system.py      # 结构化日志系统
+│   ├── screenshot.py          # 截图管理模块
+│   ├── redis_stats.py         # Redis 统计
 │   ├── notifier.py            # 飞书通知
+│   ├── schemas.py             # Pydantic 模型
 │   ├── notifiers/             # 多渠道通知
+│   │   ├── base.py            # 通知基类
 │   │   ├── wechat_work.py     # 企业微信
 │   │   ├── dingtalk.py        # 钉钉
 │   │   ├── email_notifier.py  # 邮件
 │   │   └── webhook.py         # Webhook
-│   └── schemas.py             # Pydantic 模型
+│   └── routers/               # API 路由模块
+│       ├── auth.py            # 用户认证与管理
+│       ├── camera.py          # 摄像头管理
+│       ├── alert.py           # 告警管理
+│       ├── roi.py             # ROI 配置
+│       ├── model.py           # 模型管理
+│       ├── system.py          # 系统管理
+│       └── deps.py            # 依赖注入
 ├── frontend/                   # 前端资源
 │   ├── index.html             # 主页面
 │   ├── manifest.json          # PWA 清单
 │   ├── service-worker.js      # Service Worker
 │   └── static/
 │       ├── css/main.css       # 样式
-│       ├── js/                # ES 模块
-│       │   ├── app.js         # 主入口
-│       │   ├── auth.js        # 认证模块
-│       │   ├── websocket.js   # WebSocket
-│       │   ├── camera-grid.js # 摄像头网格
-│       │   ├── stats.js       # 统计面板
-│       │   ├── alerts.js      # 告警历史
-│       │   ├── playback.js    # 录像回放
-│       │   └── ...
-│       └── icons/             # PWA 图标
+│       └── js/                # ES 模块（14个）
+│           ├── app.js         # 主入口
+│           ├── auth.js        # 认证模块
+│           ├── websocket.js   # WebSocket 连接
+│           ├── camera-grid.js # 摄像头网格
+│           ├── camera-mgmt.js # 摄像头管理
+│           ├── stats.js       # 统计面板
+│           ├── alerts.js      # 告警历史
+│           ├── playback.js    # 录像回放
+│           ├── user-mgmt.js   # 用户管理
+│           ├── roi-draw.js    # ROI 绘制工具
+│           ├── audit-logs.js  # 审计日志
+│           ├── logs.js        # 实时日志
+│           ├── notifications.js # 通知配置
+│           └── toast.js       # 通知组件
 ├── alembic/                    # 数据库迁移
 │   └── versions/
 │       ├── 001_initial_schema.py
 │       ├── 002_add_audit_logs.py
-│       └── 003_add_escalation_and_roi.py
+│       ├── 003_add_escalation_and_roi.py
+│       ├── 004_add_alert_acknowledged.py
+│       ├── 005_add_foreign_keys_and_indexes.py
+│       └── 006_add_alert_composite_index.py
 ├── models/                     # YOLO 模型权重
 ├── data/                       # 截图与日志存储
+├── scripts/                    # 工具脚本
+│   ├── init_database.py       # 数据库初始化
+│   ├── check_camera.py        # 摄像头检测
+│   ├── train.py               # 模型训练
+│   ├── logger.py              # 日志工具
+│   └── function.py            # 公共函数
+├── test/                       # 测试套件
+├── nginx/                      # Nginx 配置
+│   └── nginx.conf
+├── md/                         # 文档子仓库
 ├── docker-compose.yml          # Docker 编排
 ├── Dockerfile                  # Docker 构建
-├── .github/workflows/ci.yml   # CI/CD 流水线
+├── Makefile                    # 任务管理
 ├── config.yaml                 # 应用配置
+├── config.test.yaml            # 测试配置
 ├── .env.example                # 环境变量模板
 ├── requirements.txt            # Python 依赖
-└── start.bat                   # Windows 启动脚本
+├── pytest.ini                  # 测试配置
+├── alembic.ini                 # 数据库迁移配置
+├── README.md                   # 项目说明
+├── CHANGELOG.md                # 变更日志
+├── AGENTS.md                   # 开发规范
+└── LICENSE                     # MIT 许可证
 ```
 
 ## 🚀 快速开始
@@ -129,6 +176,9 @@ yolo/
 # 克隆项目
 git clone <repository-url>
 cd yolo
+
+# 初始化子仓库（文档）
+git submodule update --init --recursive
 
 # 创建虚拟环境
 python -m venv venv
@@ -165,10 +215,16 @@ alembic upgrade head
 ### 4. 启动服务
 
 ```bash
-# Windows
-start.bat
+# 方式 1: 使用 Makefile（推荐）
+make start          # 生产模式
+make dev            # 开发模式（热重载）
 
-# Linux/Mac
+# 方式 2: 使用脚本
+bash bin/start.sh   # Linux/Mac 生产模式
+bash bin/dev.sh     # Linux/Mac 开发模式
+bin\start.bat       # Windows 生产模式
+
+# 方式 3: 直接运行
 python -m backend.main
 ```
 
@@ -195,58 +251,104 @@ docker-compose down
 
 ### 主要 API 端点
 
+完整的 API 文档请访问 `/docs`（Swagger UI）或 `/redoc`（ReDoc）。
+
+**核心端点：**
+
 | 端点 | 方法 | 描述 |
 |------|------|------|
 | `/api/v1/auth/login` | POST | 用户登录 |
 | `/api/v1/auth/refresh` | POST | 刷新 Token |
+| `/api/v1/auth/me` | GET | 获取当前用户信息 |
+| `/api/v1/auth/users` | GET/POST | 用户列表 / 创建用户 |
 | `/api/v1/cameras` | GET | 获取摄像头列表 |
+| `/api/v1/cameras/{id}` | PUT | 更新摄像头配置 |
+| `/api/v1/cameras/{id}/add` | POST | 添加摄像头 |
 | `/api/v1/alerts` | GET | 查询告警记录 |
+| `/api/v1/alerts/{id}/acknowledge` | POST | 确认告警 |
 | `/api/v1/rois` | GET/POST | ROI 配置管理 |
+| `/api/v1/rois/{id}` | PUT/DELETE | 更新/删除 ROI |
 | `/api/v1/escalations/pending` | GET | 待处理升级 |
 | `/api/v1/stats` | GET | 统计数据 |
+| `/api/v1/stats/trend` | GET | 趋势数据 |
+| `/api/v1/system/resources` | GET | 系统资源使用 |
+| `/api/v1/audit-logs` | GET | 审计日志 |
+| `/api/v1/models` | GET | 模型列表 |
+| `/api/v1/notifications/config` | GET | 通知配置 |
 | `/api/v1/metrics` | GET | Prometheus 指标 |
 | `/video_feed` | GET | MJPEG 视频流 |
 | `/playback` | GET | 录像回放流 |
+| `/health` | GET | 健康检查 |
 
 ## 🔧 配置说明
 
 ### config.yaml 示例
 
 ```yaml
-server:
-  host: "0.0.0.0"
-  port: 8000
+# 认证配置
+auth:
+  access_token_expire_minutes: 60
+  init_admin_username: "admin"
+  cors_origins:
+    - "http://localhost:8000"
 
+# 摄像头配置
 cameras:
   - id: 0
     name: "前门摄像头"
     source: 0  # 本地摄像头或 RTSP URL
+    location: "一楼大厅"
     auto_resolution: true
 
+# 检测配置
 detection:
+  model_path: "models/person_best.pt"
   gpu_enabled: false
   device: "cpu"
   conf_threshold: 0.5
   detect_every_n: 2
 
+# 告警配置
 alert:
   cooldown_sec: 30
   track_ttl_sec: 60
   screenshot:
-    save_dir: "data/screenshots"
+    enabled: true
+    quality: 75
+    save_mode: "first_only"  # first_only / all / interval
+    interval_sec: 10
     retention_days: 30
+    crop_detection: false
+    save_dir: "data/screenshots"
 
+# 数据库配置
 database:
+  type: "mysql"
   host: "localhost"
   port: 3306
   user: "root"
-  password: "password"
+  password: ""  # 通过环境变量注入
   database: "safecam"
+  charset: "utf8mb4"
+  pool_size: 5
+  pool_recycle: 3600
 
+# Redis 配置（可选）
+redis:
+  enabled: false
+  host: "localhost"
+  port: 6379
+  password: ""
+  db: 0
+
+# 通知配置
 notifications:
   feishu:
     enabled: false
     webhook_url: ""
+    push_cooldown_sec: 60
+    push_level: "high"  # low / medium / high
+    include_screenshot: true
   wechat_work:
     enabled: false
     webhook_url: ""
@@ -260,6 +362,17 @@ notifications:
     username: ""
     password: ""
     to_addrs: []
+
+# 服务器配置
+server:
+  host: "0.0.0.0"
+  port: 8000
+  log_level: "info"
+
+# 系统配置
+system:
+  cleanup_schedule: "03:00"  # 每日清理时间
+  max_log_buffer: 500
 ```
 
 ## 📊 监控指标
