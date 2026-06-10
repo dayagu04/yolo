@@ -15,6 +15,7 @@
   - `bin/jupyter.sh` - Jupyter Notebook 启动脚本
   - `bin/start.bat` - Windows 启动脚本（从根目录移入）
 - **扩展的 Makefile**：提供 start、dev、test、init-db、jupyter、docker-up/down、lint、clean 等命令
+- **environment.yml**：Conda 环境配置，一键创建包含开发依赖的 Python 3.11 环境
 
 ### Changed
 - 更新 README.md 文档，使其与实际代码同步：

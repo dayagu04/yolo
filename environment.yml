@@ -1,0 +1,30 @@
+# YOLO 安防监控系统 Conda 环境配置
+# 使用方法：
+#   创建环境: conda env create -f environment.yml
+#   更新环境: conda env update -f environment.yml --prune
+#   激活环境: conda activate yolo
+#   删除环境: conda env remove -n yolo
+
+name: yolo
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Python 版本（与 AGENTS.md 中规定的 3.11 保持一致）
+  - python=3.11
+
+  # 通过 conda 安装的核心二进制依赖（比 pip 更稳定）
+  - pip
+
+  # 通过 pip 安装项目依赖（复用 requirements.txt，避免重复维护）
+  - pip:
+      - -r requirements.txt
+      # 开发依赖
+      - pytest>=7.4.0
+      - pytest-cov>=4.1.0
+      - pytest-html>=4.1.0
+      - pytest-asyncio>=0.21.0
+      - pytest-timeout>=2.2.0
+      - ruff>=0.1.0
+      - pip-audit>=2.6.0

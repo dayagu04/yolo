@@ -179,9 +179,21 @@ cd yolo
 
 # 初始化子仓库（文档）
 git submodule update --init --recursive
+```
 
-# 创建虚拟环境
-python -m venv venv
+**方式 A：使用 Conda（推荐）**
+
+```bash
+# 一键创建包含所有依赖的环境
+conda env create -f environment.yml
+conda activate yolo
+```
+
+**方式 B：使用 venv + pip**
+
+```bash
+# 创建虚拟环境（要求 Python 3.11）
+python3.11 -m venv venv
 source venv/bin/activate  # Linux/Mac
 # 或
 venv\Scripts\activate     # Windows

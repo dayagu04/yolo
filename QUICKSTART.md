@@ -1,5 +1,17 @@
 # YOLO 安防监控系统 - 快速命令参考
 
+## 环境准备
+
+```bash
+# Conda（推荐）
+conda env create -f environment.yml
+conda activate yolo
+
+# 或 venv（要求 Python 3.11）
+python3.11 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+```
+
 ## 开发命令
 
 ```bash
