@@ -179,3 +179,32 @@ class TestDatabaseOperations:
 
         assert duration < 1, f"查询50条耗时 {duration:.2f}s，超过1秒"
         assert len(result["alerts"]) > 0
+
+
+@pytest.mark.database
+class TestEscalationFilter:
+    """告警升级筛选回归测试（验证已确认告警不再被升级）"""
+
+    def test_unprocessed_alerts_excludes_high_level(self, db_manager):
+        """high 级别告警不进入升级队列"""
+        db_manager.create_alert(camera_id=0, person_count=1, new_track_ids=[1], level="high")
+        db_manager.create_alert(camera_id=0, person_count=1, new_track_ids=[2], level="low")
+
+        # older_than_sec=-1 使 cutoff 略晚于当前，包含刚插入的告警
+        unprocessed = db_manager.get_unprocessed_alerts(older_than_sec=-1)
+        levels = {a["level"] for a in unprocessed}
+        assert "high" not in levels
+        assert "low" in levels
+
+    def test_unprocessed_alerts_excludes_acknowledged(self, db_manager):
+        """已确认（acknowledged）的告警不应再被自动升级（bug 回归）"""
+        ack_id = db_manager.create_alert(camera_id=0, person_count=1, new_track_ids=[1], level="low")
+        open_id = db_manager.create_alert(camera_id=0, person_count=1, new_track_ids=[2], level="low")
+
+        # 确认其中一条
+        assert db_manager.acknowledge_alert(ack_id, "tester") is True
+
+        unprocessed = db_manager.get_unprocessed_alerts(older_than_sec=-1)
+        ids = {a["id"] for a in unprocessed}
+        assert ack_id not in ids, "已确认告警不应出现在升级队列中"
+        assert open_id in ids, "未确认告警应出现在升级队列中"

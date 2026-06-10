@@ -240,12 +240,11 @@ class TestFeishuNotifier:
 
         assert image_key is None
 
-    @pytest.mark.asyncio
-    async def test_build_card_basic(self, notifier_config, mock_alert):
+    def test_build_card_basic(self, notifier_config, mock_alert):
         """测试构建基本告警卡片"""
         notifier = FeishuNotifier(notifier_config)
 
-        card = await notifier._build_card(mock_alert, None)
+        card = notifier._build_card(mock_alert, None)
 
         assert "msg_type" in card
         assert card["msg_type"] == "interactive"
@@ -253,8 +252,7 @@ class TestFeishuNotifier:
         assert "header" in card["card"]
         assert "elements" in card["card"]
 
-    @pytest.mark.asyncio
-    async def test_build_card_with_screenshot(self, notifier_config, mock_alert, tmp_path):
+    def test_build_card_with_screenshot(self, notifier_config, mock_alert, tmp_path):
         """测试构建带截图的卡片"""
         import cv2
         import numpy as np
@@ -267,18 +265,17 @@ class TestFeishuNotifier:
         notifier._tenant_token = "test_token"
         notifier._token_expire_ts = 9999999999
 
-        with patch.object(notifier, '_upload_image', new_callable=AsyncMock, return_value="test_image_key"):
-            card = await notifier._build_card(mock_alert, str(img_path))
+        # image_key 由 send_alert 层上传后传入 _build_card
+        card = notifier._build_card(mock_alert, "test_image_key")
 
-            card_str = str(card)
-            assert "test_image_key" in card_str
+        card_str = str(card)
+        assert "test_image_key" in card_str
 
-    @pytest.mark.asyncio
-    async def test_build_card_no_screenshot(self, notifier_config, mock_alert):
+    def test_build_card_no_screenshot(self, notifier_config, mock_alert):
         """测试构建无截图的卡片"""
         notifier = FeishuNotifier(notifier_config)
 
-        card = await notifier._build_card(mock_alert, None)
+        card = notifier._build_card(mock_alert, None)
 
         # 不应该有图片元素
         elements = card["card"]["elements"]

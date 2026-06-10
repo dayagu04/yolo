@@ -5,31 +5,64 @@ import pytest
 from unittest.mock import Mock, patch, AsyncMock, MagicMock
 from pathlib import Path
 import sys
+import os
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
+
+os.environ.setdefault("YOLO_AUTH_SECRET_KEY", "test_secret_key_for_unit_testing_only_32bytes!!")
+
+
+@pytest.fixture
+def main_client():
+    """构建带认证覆盖的 TestClient。
+
+    路由从 request.app.state.* 读取依赖；get_camera/health 读取 backend.main 模块全局。
+    因此同时设置 app.state 与模块全局，并覆盖鉴权依赖，便于直接测试受保护端点。
+    返回 (client, app, cameras, fake_user)，测试可按需调整 app.state.*。
+    """
+    from backend.main import app
+    from backend import auth as auth_mod
+    from fastapi.testclient import TestClient
+
+    fake_user = {"sub": "tester", "role": "admin", "id": 1}
+    app.dependency_overrides[auth_mod.get_current_user] = lambda: fake_user
+    app.dependency_overrides[auth_mod.require_operator] = lambda: fake_user
+    app.dependency_overrides[auth_mod.require_admin] = lambda: fake_user
+
+    cameras: dict = {}
+    config = {"cameras": [], "detection": {}, "alert": {}}
+    logger = Mock()
+    logger._iso_now.return_value = "2026-01-01T00:00:00"
+
+    app.state.cameras = cameras
+    app.state.config = config
+    app.state.db_manager = None
+    app.state.redis_stats = None
+    app.state.structured_logger = logger
+    app.state.event_loop = None
+
+    with patch('backend.main.cameras', cameras), \
+         patch('backend.main.config', config), \
+         patch('backend.main.db_manager', None), \
+         patch('backend.main.redis_stats', None), \
+         patch('backend.main.structured_logger', logger), \
+         patch('backend.main.START_TS', 1000.0):
+        # raise_server_exceptions=False：让未捕获异常返回 500（与生产 uvicorn 行为一致），
+        # 而非在测试中直接抛出
+        client = TestClient(app, raise_server_exceptions=False)
+        yield client, app, cameras, fake_user
+
+    app.dependency_overrides.clear()
 
 
 @pytest.mark.unit
 class TestMainRoutes:
     """main.py 路由处理器单元测试"""
 
-    @pytest.fixture
-    def mock_app_state(self):
-        """模拟应用状态"""
-        with patch('backend.main.cameras', {}), \
-             patch('backend.main.config', {"cameras": []}), \
-             patch('backend.main.db_manager', None), \
-             patch('backend.main.redis_stats', None), \
-             patch('backend.main.START_TS', 1000.0):
-            yield
-
-    def test_health_endpoint_structure(self, mock_app_state):
+    def test_health_endpoint_structure(self, main_client):
         """测试健康检查端点返回结构"""
-        from backend.main import app
-        from fastapi.testclient import TestClient
-
-        client = TestClient(app)
+        client, app, cameras, _ = main_client
         response = client.get("/health")
 
         assert response.status_code == 200
@@ -38,12 +71,9 @@ class TestMainRoutes:
         assert "uptime_sec" in data
         assert "cameras" in data
 
-    def test_camera_list_empty(self, mock_app_state):
+    def test_camera_list_empty(self, main_client):
         """测试空摄像头列表"""
-        from backend.main import app
-        from fastapi.testclient import TestClient
-
-        client = TestClient(app)
+        client, app, cameras, _ = main_client
         response = client.get("/api/v1/cameras")
 
         assert response.status_code == 200
@@ -51,12 +81,9 @@ class TestMainRoutes:
         assert data["total"] == 0
         assert data["cameras"] == []
 
-    def test_camera_status_creates_new(self, mock_app_state):
+    def test_camera_status_creates_new(self, main_client):
         """测试查询不存在的摄像头会创建新实例"""
-        from backend.main import app, cameras
-        from fastapi.testclient import TestClient
-
-        client = TestClient(app)
+        client, app, cameras, _ = main_client
 
         with patch('backend.main.get_camera') as mock_get:
             mock_cam = Mock()
@@ -70,10 +97,9 @@ class TestMainRoutes:
             data = response.json()
             assert data["camera_id"] == 0
 
-    def test_detection_config_update(self, mock_app_state):
+    def test_detection_config_update(self, main_client):
         """测试检测配置更新"""
-        from backend.main import app, cameras
-        from fastapi.testclient import TestClient
+        client, app, cameras, _ = main_client
 
         mock_cam = Mock()
         mock_cam.toggle_detection = Mock()
@@ -81,9 +107,8 @@ class TestMainRoutes:
         mock_cam.get_status.return_value = {"camera_id": 0, "running": True}
         cameras[0] = mock_cam
 
-        client = TestClient(app)
         response = client.post(
-            "/api/v1/camera/0/config",
+            "/api/v1/cameras/0/config",
             json={"enabled": False, "conf": 0.7}
         )
 
@@ -91,71 +116,64 @@ class TestMainRoutes:
         mock_cam.toggle_detection.assert_called_once_with(False)
         mock_cam.set_conf.assert_called_once_with(0.7)
 
-    def test_alerts_query_no_db(self, mock_app_state):
+    def test_alerts_query_no_db(self, main_client):
         """测试无数据库时查询告警"""
-        from backend.main import app
-        from fastapi.testclient import TestClient
+        client, app, cameras, _ = main_client
+        app.state.db_manager = None
 
-        with patch('backend.main.db_manager', None):
-            client = TestClient(app)
-            response = client.get("/api/v1/alerts")
+        response = client.get("/api/v1/alerts")
 
-            assert response.status_code == 503
-            data = response.json()
-            assert "数据库" in data["detail"]
+        assert response.status_code == 503
+        data = response.json()
+        assert "数据库" in data["detail"]
 
-    def test_alerts_query_with_db(self, mock_app_state):
+    def test_alerts_query_with_db(self, main_client):
         """测试有数据库时查询告警"""
-        from backend.main import app
-        from fastapi.testclient import TestClient
+        client, app, cameras, _ = main_client
 
         mock_db = Mock()
         mock_db.query_alerts.return_value = {
             "total": 5,
             "alerts": [{"id": 1, "camera_id": 0}]
         }
+        app.state.db_manager = mock_db
 
-        with patch('backend.main.db_manager', mock_db):
-            client = TestClient(app)
-            response = client.get("/api/v1/alerts?limit=10")
+        response = client.get("/api/v1/alerts?limit=10")
 
-            assert response.status_code == 200
-            data = response.json()
-            assert data["total"] == 5
-            assert len(data["alerts"]) == 1
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 5
+        assert len(data["alerts"]) == 1
 
-    def test_logs_query(self, mock_app_state):
+    def test_logs_query(self, main_client):
         """测试日志查询"""
-        from backend.main import app
-        from fastapi.testclient import TestClient
+        client, app, cameras, _ = main_client
 
-        with patch('backend.main.structured_logger') as mock_logger:
-            mock_logger.get_recent_logs.return_value = [
-                {"level": "info", "message": "test"}
-            ]
+        mock_logger = Mock()
+        mock_logger.get_recent_logs.return_value = [
+            {"level": "info", "message": "test"}
+        ]
+        app.state.structured_logger = mock_logger
 
-            client = TestClient(app)
-            response = client.get("/api/v1/logs?limit=50")
+        response = client.get("/api/v1/logs?limit=50")
 
-            assert response.status_code == 200
-            data = response.json()
-            assert "logs" in data
-            assert "count" in data
+        assert response.status_code == 200
+        data = response.json()
+        assert "logs" in data
+        assert "count" in data
 
-    def test_stats_query_no_redis(self, mock_app_state):
+    def test_stats_query_no_redis(self, main_client):
         """测试无 Redis 时查询统计"""
-        from backend.main import app
-        from fastapi.testclient import TestClient
+        client, app, cameras, _ = main_client
+        app.state.redis_stats = None
 
-        client = TestClient(app)
         response = client.get("/api/v1/stats")
 
         assert response.status_code == 503
 
-    def test_stats_query_with_redis(self, mock_app_state):
+    def test_stats_query_with_redis(self, main_client):
         """测试有 Redis 时查询统计"""
-        from backend.main import app
-        from fastapi.testclient import TestClient
+        client, app, cameras, _ = main_client
 
         mock_redis = Mock()
         mock_redis.is_enabled.return_value = True
@@ -163,94 +181,83 @@ class TestMainRoutes:
             "today_alerts": 10,
             "online_cameras": [0, 1]
         }
+        app.state.redis_stats = mock_redis
 
-        with patch('backend.main.redis_stats', mock_redis):
-            client = TestClient(app)
-            response = client.get("/api/v1/stats")
+        response = client.get("/api/v1/stats")
 
-            assert response.status_code == 200
-            data = response.json()
-            assert "today_alerts" in data
+        assert response.status_code == 200
+        data = response.json()
+        assert "today_alerts" in data
 
     @pytest.mark.boundary
-    def test_invalid_camera_id_type(self, mock_app_state):
+    def test_invalid_camera_id_type(self, main_client):
         """测试无效摄像头 ID 类型"""
-        from backend.main import app
-        from fastapi.testclient import TestClient
-
-        client = TestClient(app)
+        client, app, cameras, _ = main_client
         response = client.get("/api/v1/camera/invalid/status")
 
         assert response.status_code == 422
 
     @pytest.mark.boundary
-    def test_negative_camera_id(self, mock_app_state):
+    def test_negative_camera_id(self, main_client):
         """测试负数摄像头 ID"""
-        from backend.main import app
-        from fastapi.testclient import TestClient
+        client, app, cameras, _ = main_client
 
-        client = TestClient(app)
-        response = client.get("/api/v1/camera/-1/status")
+        with patch('backend.main.get_camera') as mock_get:
+            mock_cam = Mock()
+            mock_cam.get_status.return_value = {"camera_id": -1, "running": False}
+            mock_get.return_value = mock_cam
+            response = client.get("/api/v1/camera/-1/status")
 
         # 应该能处理或返回错误
         assert response.status_code in [200, 400, 422]
 
     @pytest.mark.boundary
-    def test_oversized_limit_parameter(self, mock_app_state):
+    def test_oversized_limit_parameter(self, main_client):
         """测试超大 limit 参数"""
-        from backend.main import app
-        from fastapi.testclient import TestClient
+        client, app, cameras, _ = main_client
 
         mock_db = Mock()
         mock_db.query_alerts.return_value = {"total": 0, "alerts": []}
+        app.state.db_manager = mock_db
 
-        with patch('backend.main.db_manager', mock_db):
-            client = TestClient(app)
-            response = client.get("/api/v1/alerts?limit=99999")
+        response = client.get("/api/v1/alerts?limit=99999")
 
-            # 应该被限制或返回错误
-            assert response.status_code in [200, 422]
+        # 应该被限制或返回错误
+        assert response.status_code in [200, 422]
 
     @pytest.mark.exception
-    def test_database_query_exception(self, mock_app_state):
+    def test_database_query_exception(self, main_client):
         """测试数据库查询异常"""
-        from backend.main import app
-        from fastapi.testclient import TestClient
+        client, app, cameras, _ = main_client
 
         mock_db = Mock()
         mock_db.query_alerts.side_effect = Exception("Database error")
+        app.state.db_manager = mock_db
 
-        with patch('backend.main.db_manager', mock_db):
-            client = TestClient(app)
-            response = client.get("/api/v1/alerts")
+        response = client.get("/api/v1/alerts")
 
-            assert response.status_code == 500
+        assert response.status_code == 500
 
     @pytest.mark.exception
-    def test_invalid_detection_config(self, mock_app_state):
+    def test_invalid_detection_config(self, main_client):
         """测试无效检测配置"""
-        from backend.main import app, cameras
-        from fastapi.testclient import TestClient
-
+        client, app, cameras, _ = main_client
         cameras[0] = Mock()
 
-        client = TestClient(app)
         response = client.post(
-            "/api/v1/camera/0/config",
+            "/api/v1/cameras/0/config",
             json={"enabled": "invalid", "conf": "not_a_number"}
         )
 
         assert response.status_code == 422
 
     @pytest.mark.exception
-    def test_malformed_json_request(self, mock_app_state):
+    def test_malformed_json_request(self, main_client):
         """测试格式错误的 JSON 请求"""
-        from backend.main import app
-        from fastapi.testclient import TestClient
+        client, app, cameras, _ = main_client
 
-        client = TestClient(app)
         response = client.post(
-            "/api/v1/camera/0/config",
+            "/api/v1/cameras/0/config",
             data="not json",
             headers={"Content-Type": "application/json"}
         )
@@ -262,19 +269,9 @@ class TestMainRoutes:
 class TestDynamicCameraAPI:
     """动态摄像头管理 API 测试（P2 补充）"""
 
-    @pytest.fixture
-    def mock_app_state(self):
-        with patch('backend.main.cameras', {}), \
-             patch('backend.main.config', {"cameras": [], "detection": {}, "alert": {}}), \
-             patch('backend.main.db_manager', None), \
-             patch('backend.main.redis_stats', None), \
-             patch('backend.main.START_TS', 1000.0):
-            yield
-
-    def test_list_cameras_with_config(self):
+    def test_list_cameras_with_config(self, main_client):
         """GET /api/v1/cameras 返回配置中的摄像头，id 字段存在"""
-        from backend.main import app
-        from fastapi.testclient import TestClient
+        client, app, cameras, _ = main_client
 
         cam_cfg = [{"id": 0, "name": "测试", "location": "A", "source": 0}]
         mock_cam = Mock()
@@ -282,11 +279,10 @@ class TestDynamicCameraAPI:
             "camera_id": 0, "connected": True, "running": True,
             "model_loaded": False, "fps": 25.0, "active_tracks": 0,
         }
+        app.state.config = {"cameras": cam_cfg}
+        cameras[0] = mock_cam
 
-        with patch('backend.main.config', {"cameras": cam_cfg}), \
-             patch('backend.main.cameras', {0: mock_cam}):
-            client = TestClient(app)
-            resp = client.get("/api/v1/cameras")
+        resp = client.get("/api/v1/cameras")
 
         assert resp.status_code == 200
         data = resp.json()
@@ -296,31 +292,22 @@ class TestDynamicCameraAPI:
         assert cam["id"] == 0
         assert cam["name"] == "测试"
 
-    def test_add_camera_missing_source(self, mock_app_state):
+    def test_add_camera_missing_source(self, main_client):
         """POST /api/v1/cameras/{id}/add 缺少 source 返回 422"""
-        from backend.main import app
-        from fastapi.testclient import TestClient
-
-        client = TestClient(app)
+        client, app, cameras, _ = main_client
         resp = client.post("/api/v1/cameras/5/add", json={"name": "新摄像头"})
         assert resp.status_code == 422
 
-    def test_add_camera_duplicate(self, mock_app_state):
+    def test_add_camera_duplicate(self, main_client):
         """POST /api/v1/cameras/{id}/add 重复添加返回 409"""
-        from backend.main import app, cameras
-        from fastapi.testclient import TestClient
-
+        client, app, cameras, _ = main_client
         cameras[5] = Mock()
-        client = TestClient(app)
         resp = client.post("/api/v1/cameras/5/add", json={"source": 0})
         assert resp.status_code == 409
 
-    def test_add_camera_invalid_json(self, mock_app_state):
+    def test_add_camera_invalid_json(self, main_client):
         """POST /api/v1/cameras/{id}/add 非法 JSON 返回 422"""
-        from backend.main import app
-        from fastapi.testclient import TestClient
-
-        client = TestClient(app)
+        client, app, cameras, _ = main_client
         resp = client.post(
             "/api/v1/cameras/5/add",
             data="not-json",
@@ -328,28 +315,20 @@ class TestDynamicCameraAPI:
         )
         assert resp.status_code == 422
 
-    def test_remove_camera_not_found(self, mock_app_state):
+    def test_remove_camera_not_found(self, main_client):
         """POST /api/v1/cameras/{id}/remove 不存在返回 404"""
-        from backend.main import app
-        from fastapi.testclient import TestClient
-
-        client = TestClient(app)
+        client, app, cameras, _ = main_client
         resp = client.post("/api/v1/cameras/99/remove")
         assert resp.status_code == 404
 
-    def test_remove_camera_success(self, mock_app_state):
+    def test_remove_camera_success(self, main_client):
         """POST /api/v1/cameras/{id}/remove 成功移除"""
-        from backend.main import app, cameras
-        from fastapi.testclient import TestClient
+        client, app, cameras, _ = main_client
 
         mock_cam = Mock()
         cameras[3] = mock_cam
 
-        with patch('backend.main.structured_logger') as mock_log, \
-             patch('backend.main._dispatch_signal'):
-            mock_log.log.return_value = {}
-            client = TestClient(app)
-            resp = client.post("/api/v1/cameras/3/remove")
+        resp = client.post("/api/v1/cameras/3/remove")
 
         assert resp.status_code == 200
         assert resp.json()["success"] is True
@@ -485,6 +464,28 @@ class TestBroadcastMechanism:
 
         assert mock_ws_good in _ws_clients
         assert mock_ws_dead not in _ws_clients
+
+    @pytest.mark.asyncio
+    async def test_broadcast_tolerates_concurrent_modification(self):
+        """广播遍历快照，send 期间有协程修改 _ws_clients 不应抛 RuntimeError（bug 回归）"""
+        from backend.main import _broadcast, _ws_clients
+
+        _ws_clients.clear()
+
+        # 一个客户端在自己的 send_json 中修改 _ws_clients（模拟并发连接/断开）
+        async def mutate_during_send(_msg):
+            _ws_clients.append(AsyncMock())
+
+        mock_ws_mutator = AsyncMock()
+        mock_ws_mutator.send_json.side_effect = mutate_during_send
+        mock_ws_normal = AsyncMock()
+
+        _ws_clients.extend([mock_ws_mutator, mock_ws_normal])
+
+        # 不应抛出 "list changed size during iteration"
+        await _broadcast({"type": "test"})
+
+        mock_ws_normal.send_json.assert_called_once()
 
 
 @pytest.mark.unit
