@@ -81,6 +81,8 @@ async def list_users(request: Request, _user: dict = Depends(require_admin)):
 
 @auth_router.post("/users")
 async def create_user(request: Request, _user: dict = Depends(require_admin)):
+    from backend.auth import validate_password_strength
+
     db = get_db(request)
     body = await request.json()
     username = body.get("username", "").strip()
@@ -90,6 +92,12 @@ async def create_user(request: Request, _user: dict = Depends(require_admin)):
         raise HTTPException(status_code=422, detail="username 和 password 必填")
     if role not in ("admin", "operator", "viewer"):
         raise HTTPException(status_code=422, detail="role 必须是 admin/operator/viewer")
+
+    # 验证密码强度
+    is_valid, error_msg = validate_password_strength(password)
+    if not is_valid:
+        raise HTTPException(status_code=422, detail=error_msg)
+
     if db.get_user_by_username(username):
         raise HTTPException(status_code=409, detail="用户名已存在")
     user = db.create_user(username, hash_password(password), role=role)
@@ -129,6 +137,8 @@ async def delete_user(user_id: int, request: Request, _user: dict = Depends(requ
 
 @auth_router.put("/users/{user_id}/password")
 async def change_password(user_id: int, request: Request, _user: dict = Depends(get_current_user)):
+    from backend.auth import validate_password_strength
+
     db = get_db(request)
     # 只能改自己的密码，除非是 admin
     if _user["role"] != "admin" and user_id != _user.get("id"):
@@ -136,8 +146,12 @@ async def change_password(user_id: int, request: Request, _user: dict = Depends(
     body = await request.json()
     old_password = body.get("old_password", "")
     new_password = body.get("new_password", "")
-    if not new_password or len(new_password) < 6:
-        raise HTTPException(status_code=422, detail="新密码至少 6 位")
+
+    # 验证密码强度
+    is_valid, error_msg = validate_password_strength(new_password)
+    if not is_valid:
+        raise HTTPException(status_code=422, detail=error_msg)
+
     # admin 改别人密码不需要旧密码
     if _user["role"] != "admin" or user_id == _user.get("id"):
         user = db.get_user_by_username(_user["sub"])

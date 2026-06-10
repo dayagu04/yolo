@@ -1,6 +1,7 @@
 // ── 告警历史模块 ──
 import { authFetch } from './auth.js';
 import { toastError, toastWarn } from './toast.js';
+import { escapeHtml, formatDate } from './utils.js';
 
 let alertPage = 1;
 const ALERT_PAGE_SIZE = 20;
@@ -33,19 +34,91 @@ export async function loadAlerts(page) {
 function renderAlertTable(rows, total, page) {
   const tbody = document.getElementById('alert-tbody');
   if (!tbody) return;
+
+  // 清空表格
+  tbody.innerHTML = '';
+
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty-row">暂无数据</td></tr>';
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 8;
+    td.className = 'empty-row';
+    td.textContent = '暂无数据';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
   } else {
-    tbody.innerHTML = rows.map(r => {
-      const levelBadge = `<span class="level-badge level-${r.level}">${{high:'高',medium:'中',low:'低'}[r.level] || r.level}</span>`;
-      const thumb = r.screenshot_path
-        ? `<img class="thumb" src="/api/v1/alerts/${r.id}/screenshot" onclick="openLightbox('/api/v1/alerts/${r.id}/screenshot')" loading="lazy">`
-        : '<span class="muted-text">—</span>';
-      const ackBadge = r.acknowledged
-        ? `<span class="status-badge status-online" title="由 ${r.acknowledged_by} 确认于 ${r.acknowledged_at || ''}">已确认</span>`
-        : `<button class="btn btn-sm" onclick="acknowledgeAlert(${r.id})">确认</button>`;
-      return `<tr><td>${r.id}</td><td>${r.created_at || r.timestamp || ''}</td><td>${r.camera_id}</td><td>${r.person_count}</td><td>${r.message || ''}</td><td>${levelBadge}</td><td>${ackBadge}</td><td>${thumb}</td></tr>`;
-    }).join('');
+    rows.forEach(r => {
+      const tr = document.createElement('tr');
+
+      // ID 列
+      const tdId = document.createElement('td');
+      tdId.textContent = r.id;
+      tr.appendChild(tdId);
+
+      // 时间列
+      const tdTime = document.createElement('td');
+      tdTime.textContent = r.created_at || r.timestamp || '';
+      tr.appendChild(tdTime);
+
+      // 摄像头 ID 列
+      const tdCamera = document.createElement('td');
+      tdCamera.textContent = r.camera_id;
+      tr.appendChild(tdCamera);
+
+      // 人数列
+      const tdCount = document.createElement('td');
+      tdCount.textContent = r.person_count;
+      tr.appendChild(tdCount);
+
+      // 消息列（使用 escapeHtml 防止 XSS）
+      const tdMessage = document.createElement('td');
+      tdMessage.textContent = r.message || '';
+      tr.appendChild(tdMessage);
+
+      // 级别列
+      const tdLevel = document.createElement('td');
+      const levelBadge = document.createElement('span');
+      levelBadge.className = `level-badge level-${r.level}`;
+      levelBadge.textContent = {high:'高',medium:'中',low:'低'}[r.level] || r.level;
+      tdLevel.appendChild(levelBadge);
+      tr.appendChild(tdLevel);
+
+      // 确认状态列
+      const tdAck = document.createElement('td');
+      if (r.acknowledged) {
+        const ackBadge = document.createElement('span');
+        ackBadge.className = 'status-badge status-online';
+        ackBadge.title = `由 ${escapeHtml(r.acknowledged_by)} 确认于 ${r.acknowledged_at || ''}`;
+        ackBadge.textContent = '已确认';
+        tdAck.appendChild(ackBadge);
+      } else {
+        const ackBtn = document.createElement('button');
+        ackBtn.className = 'btn btn-sm';
+        ackBtn.textContent = '确认';
+        ackBtn.onclick = () => acknowledgeAlert(r.id);
+        tdAck.appendChild(ackBtn);
+      }
+      tr.appendChild(tdAck);
+
+      // 截图列
+      const tdThumb = document.createElement('td');
+      if (r.screenshot_path) {
+        const img = document.createElement('img');
+        img.className = 'thumb';
+        img.src = `/api/v1/alerts/${r.id}/screenshot`;
+        img.loading = 'lazy';
+        img.onclick = () => window.openLightbox(`/api/v1/alerts/${r.id}/screenshot`);
+        tdThumb.appendChild(img);
+      } else {
+        const span = document.createElement('span');
+        span.className = 'muted-text';
+        span.textContent = '—';
+        tdThumb.appendChild(span);
+      }
+      tr.appendChild(tdThumb);
+
+      tbody.appendChild(tr);
+    });
   }
 
   const totalPages = Math.max(1, Math.ceil(total / ALERT_PAGE_SIZE));

@@ -58,6 +58,48 @@ def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 
 
+def validate_password_strength(password: str) -> tuple[bool, str]:
+    """
+    验证密码强度
+
+    要求：
+    - 最小长度 8 位
+    - 至少包含一个小写字母
+    - 至少包含一个大写字母
+    - 至少包含一个数字
+    - 至少包含一个特殊字符（可选，但建议）
+
+    Returns:
+        (is_valid, error_message)
+    """
+    if not password:
+        return False, "密码不能为空"
+
+    if len(password) < 8:
+        return False, "密码至少需要 8 位"
+
+    has_lower = any(c.islower() for c in password)
+    has_upper = any(c.isupper() for c in password)
+    has_digit = any(c.isdigit() for c in password)
+    has_special = any(not c.isalnum() for c in password)
+
+    if not has_lower:
+        return False, "密码必须包含至少一个小写字母"
+
+    if not has_upper:
+        return False, "密码必须包含至少一个大写字母"
+
+    if not has_digit:
+        return False, "密码必须包含至少一个数字"
+
+    # 特殊字符为推荐，不强制
+    if not has_special:
+        # 可以选择不强制要求特殊字符
+        pass
+
+    return True, ""
+
+
 # ------------------------------------------------------------------ #
 #  登录锁定
 # ------------------------------------------------------------------ #

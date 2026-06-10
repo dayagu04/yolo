@@ -15,7 +15,28 @@ export function addLog(msg) {
   const text = msg.message || '';
 
   item.className = `log-item ${type === 'alert' ? 'alert' : level}`;
-  item.innerHTML = `<span class="log-ts">${ts}</span><span class="log-cam">${camPart}</span><span class="log-event">${event}</span><span class="log-msg">${text}</span>`;
+
+  // 使用安全的 DOM 操作代替 innerHTML
+  const tsSpan = document.createElement('span');
+  tsSpan.className = 'log-ts';
+  tsSpan.textContent = ts;
+
+  const camSpan = document.createElement('span');
+  camSpan.className = 'log-cam';
+  camSpan.textContent = camPart;
+
+  const eventSpan = document.createElement('span');
+  eventSpan.className = 'log-event';
+  eventSpan.textContent = event;
+
+  const msgSpan = document.createElement('span');
+  msgSpan.className = 'log-msg';
+  msgSpan.textContent = text;
+
+  item.appendChild(tsSpan);
+  item.appendChild(camSpan);
+  item.appendChild(eventSpan);
+  item.appendChild(msgSpan);
 
   list.insertBefore(item, list.firstChild);
   logCount++;
