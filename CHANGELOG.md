@@ -6,8 +6,6 @@
 
 ### Added
 - **SECURITY.md**：安全规范与最佳实践文档
-- **BUGFIX_REPORT.md**：Bug 修复记录与待办事项
-- **CODE_QUALITY_IMPROVEMENT.md**：代码质量改进报告
 - **frontend/static/js/utils.js**：前端工具模块（HTML 转义、日期格式化、安全 DOM 操作）
 - **test/test_password_validation.py**：密码强度验证测试套件（20 个测试用例）
 - **test/test_multi_camera_integration.py**：多摄像头集成测试（12 个测试用例）

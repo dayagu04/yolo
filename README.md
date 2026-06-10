@@ -429,7 +429,6 @@ system:
 - [QUICKSTART.md](QUICKSTART.md) - 快速命令参考
 - [AGENTS.md](AGENTS.md) - 开发规范与架构说明
 - [SECURITY.md](SECURITY.md) - 安全规范与最佳实践
-- [BUGFIX_REPORT.md](BUGFIX_REPORT.md) - Bug 修复记录
 
 ## 🙏 致谢
 
