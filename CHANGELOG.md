@@ -12,6 +12,23 @@
 - **backend/auth.py**：`validate_password_strength()` 密码强度验证函数
 
 ### Fixed
+- **[CRITICAL] Alembic 迁移链断裂**（`alembic/versions/005`）：`down_revision` 从 `"004"` 修正为 `"004_add_alert_acknowledged"`，此前全部迁移无法执行
+- **[CRITICAL] alerts.camera_id 非空与 SET NULL 外键冲突**（`alembic/versions/001`, `005`）：迁移 001 改为 nullable，迁移 005 增加 alter_column，避免 InnoDB 1830 错误
+- **[MAJOR] 徘徊告警重复触发**（`backend/roi_detector.py`）：增加 `alerted_loitering` 标志，达到阈值仅触发一次
+- **[MAJOR] ROI 跟踪记录内存泄漏**（`backend/roi_detector.py`）：`check_all` 中按量触发 `cleanup_stale_tracks`（此前从未被调用）
+- **[MAJOR] 告警升级未过滤已确认告警**（`backend/database.py`）：`get_unprocessed_alerts` 增加 `acknowledged.is_(False)` 过滤
+- **[MAJOR] WebSocket 鉴权失败后无限重连**（`frontend/static/js/websocket.js`）：4001 关闭码停止重连，新增 `closeWS()` 并在 401 时调用
+- **[MAJOR] _broadcast 遍历时并发修改列表**（`backend/main.py`）：遍历 `list(_ws_clients)` 快照
+- **[MAJOR] nginx 登录限流规则失效**（`nginx/nginx.conf`）：`/api/auth/login` 修正为 `/api/v1/auth/login`，并补充 `/playback`、`/static/`、PWA、`/metrics` 代理
+- **[MAJOR] Docker 环境变量错配**（`.env.example`）：`YOLO_DATABASE_NAME` 修正为生效的 `YOLO_DATABASE_DATABASE`，对齐数据库名 `security_monitor`，补充 Docker 主机名说明
+- **[MAJOR] Service Worker 漏缓存 utils.js**（`frontend/service-worker.js`）：补入 `utils.js`，缓存版本升至 v4
+- **[MINOR] 前后端密码规则不一致**（`frontend/static/js/user-mgmt.js`, `utils.js`）：前端校验对齐后端 8 位+大小写+数字
+- **[MINOR] 审计日志筛选框翻页被清空**（`frontend/static/js/audit-logs.js`）：渲染后恢复筛选值
+- **[MINOR] roi-draw 非数组响应崩溃**（`frontend/static/js/roi-draw.js`）：增加 `Array.isArray` 守卫
+- **[MINOR] playback 升级徽章空值崩溃**（`frontend/static/js/playback.js`）：`level` 空值守卫
+- **[MINOR] 死代码清理**（`backend/camera.py`）：移除从未调用的 `_get_adaptive_detect_interval` 及孤立属性
+- **[MINOR] ORM 与 Alembic 建表分歧**（`backend/database.py`）：ORM 补充 `ix_alerts_cam_level_ts` 复合索引和 `acknowledged` 索引，与迁移 006 对齐
+- **[MINOR] init_database.py 提示修正**：启动端口 9000→8000，移除不存在的 `config.yaml.example` 引用
 - **[CRITICAL] SQL 注入风险**（`scripts/init_database.py`）：将 f-string SQL 拼接改为参数化查询
 - **[CRITICAL] Redis KEYS 命令性能问题**（`backend/redis_stats.py`）：使用 SCAN 游标替代 KEYS 命令，避免生产环境阻塞
 - **[MAJOR] 布尔值比较规范**（`backend/database.py`）：修正 SQLAlchemy 布尔值比较，使用 `.is_(True/False)`

@@ -29,10 +29,15 @@ class Alert(Base):
     screenshot_path = Column(String(512))
     message = Column(String(512))
     level = Column(Enum("low", "medium", "high"), default="high", index=True)
-    acknowledged = Column(Boolean, default=False)
+    acknowledged = Column(Boolean, default=False, index=True)
     acknowledged_by = Column(String(50))
     acknowledged_at = Column(DateTime(timezone=True))
     created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc))
+
+    # 复合索引：覆盖 query_alerts 的主要查询模式（与 Alembic 迁移 006 保持一致）
+    __table_args__ = (
+        Index("ix_alerts_cam_level_ts", "camera_id", "level", "timestamp"),
+    )
 
     def to_dict(self) -> dict:
         return {
@@ -570,7 +575,11 @@ class DatabaseManager:
             cutoff = datetime.now() - timedelta(seconds=older_than_sec)
             alerts = (
                 session.query(Alert)
-                .filter(Alert.timestamp <= cutoff, Alert.level != "high")
+                .filter(
+                    Alert.timestamp <= cutoff,
+                    Alert.level != "high",
+                    Alert.acknowledged.is_(False),
+                )
                 .order_by(Alert.timestamp.asc())
                 .all()
             )

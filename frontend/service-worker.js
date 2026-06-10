@@ -1,10 +1,11 @@
 // ── SafeCam Service Worker ──
-const CACHE_NAME = 'safecam-v3';
+const CACHE_NAME = 'safecam-v4';
 const STATIC_ASSETS = [
   '/',
   '/static/css/main.css',
   '/static/js/app.js',
   '/static/js/auth.js',
+  '/static/js/utils.js',
   '/static/js/toast.js',
   '/static/js/websocket.js',
   '/static/js/camera-grid.js',

@@ -112,9 +112,7 @@ class CameraManager:
         self._frame_buffer: collections.deque = collections.deque(maxlen=300)
         self._buffer_lock = threading.Lock()
 
-        # 自适应跳帧
-        self._adaptive_skip = True
-        self._base_detect_every_n = 2
+        # 推理缓存：场景未变化（帧差均值低于阈值）时复用上次结果
         self._prev_gray: Optional[np.ndarray] = None
         self._scene_change_threshold = 5.0  # 帧差均值阈值
 
@@ -467,26 +465,6 @@ class CameraManager:
     def _count_from_results(results) -> int:
         boxes = results[0].boxes
         return int(len(boxes)) if boxes is not None else 0
-
-    def _get_adaptive_detect_interval(self) -> int:
-        """根据场景变化率自适应调整检测间隔"""
-        if not self._adaptive_skip or self._prev_gray is None:
-            return self.detect_every_n
-
-        frame = self.get_frame()
-        if frame is None:
-            return self.detect_every_n
-
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        diff = cv2.absdiff(self._prev_gray, gray)
-        mean_diff = np.mean(diff)
-
-        if mean_diff > self._scene_change_threshold * 3:
-            return 1  # 场景剧烈变化，每帧检测
-        elif mean_diff > self._scene_change_threshold:
-            return max(1, self._base_detect_every_n // 2)
-        else:
-            return self._base_detect_every_n * 2  # 静态场景，跳更多帧
 
     def get_frame_buffer(self, seconds: float = 10.0) -> list[tuple]:
         """获取最近 N 秒的帧缓冲（用于录像回放）"""

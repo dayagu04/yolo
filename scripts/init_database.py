@@ -140,11 +140,11 @@ def main():
         print("  ✓ 数据库初始化完成")
         print("=" * 60)
         print("\n可以使用以下命令启动服务:")
-        print("  uvicorn backend.main:app --host 0.0.0.0 --port 9000")
+        print("  uvicorn backend.main:app --host 0.0.0.0 --port 8000")
 
     except FileNotFoundError:
         print("\n✗ 配置文件不存在: config.yaml")
-        print("  请先复制 config.yaml.example 并修改配置")
+        print("  请确认项目根目录存在 config.yaml")
     except Exception as e:
         print(f"\n✗ 初始化失败: {e}")
         import traceback

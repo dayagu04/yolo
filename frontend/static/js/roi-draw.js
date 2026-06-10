@@ -65,7 +65,8 @@ async function loadCameraOptions() {
 async function loadROIs() {
   try {
     const res = await authFetch(`/api/v1/rois?camera_id=${selectedCameraId}`);
-    allROIs = await res.json();
+    const data = await res.json();
+    allROIs = Array.isArray(data) ? data : [];
     renderROIList();
     drawAll();
   } catch (e) { console.error(e); }

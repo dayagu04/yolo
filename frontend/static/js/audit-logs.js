@@ -13,10 +13,12 @@ async function loadAuditLogs() {
   const wrap = document.getElementById('audit-log-content');
   if (!wrap) return;
 
+  // 捕获当前筛选值，渲染后恢复（renderAuditTable 会重建输入框）
+  const username = document.getElementById('audit-filter-user')?.value || '';
+  const action = document.getElementById('audit-filter-action')?.value || '';
+
   try {
     const params = new URLSearchParams({ limit: PAGE_SIZE, offset: auditPage * PAGE_SIZE });
-    const username = document.getElementById('audit-filter-user')?.value;
-    const action = document.getElementById('audit-filter-action')?.value;
     if (username) params.set('username', username);
     if (action) params.set('action', action);
 
@@ -24,6 +26,12 @@ async function loadAuditLogs() {
     const data = await res.json();
 
     renderAuditTable(data, wrap);
+
+    // 恢复筛选值，避免翻页/查询后输入框被清空
+    const userEl = document.getElementById('audit-filter-user');
+    const actionEl = document.getElementById('audit-filter-action');
+    if (userEl) userEl.value = username;
+    if (actionEl) actionEl.value = action;
   } catch (e) {
     wrap.innerHTML = '<div class="empty-row">加载失败（需要管理员权限）</div>';
   }

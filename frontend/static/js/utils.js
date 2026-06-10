@@ -4,6 +4,21 @@
  */
 
 /**
+ * 校验密码强度（需与后端 backend/auth.py::validate_password_strength 保持一致）
+ * 要求：至少 8 位，包含大小写字母和数字
+ * @param {string} password - 待校验的密码
+ * @returns {string} - 错误信息；通过校验时返回空字符串
+ */
+export function validatePassword(password) {
+  if (!password) return '密码不能为空';
+  if (password.length < 8) return '密码至少需要 8 位';
+  if (!/[a-z]/.test(password)) return '密码必须包含至少一个小写字母';
+  if (!/[A-Z]/.test(password)) return '密码必须包含至少一个大写字母';
+  if (!/[0-9]/.test(password)) return '密码必须包含至少一个数字';
+  return '';
+}
+
+/**
  * HTML 转义函数 - 防止 XSS 攻击
  * @param {string} text - 需要转义的文本
  * @returns {string} - 转义后的安全文本

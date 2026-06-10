@@ -134,6 +134,7 @@ export function renderEscalationBadge(level) {
     medium: '#faad14',
     high: '#ff4d4f',
   };
-  const color = colors[level] || '#999';
-  return `<span class="escalation-badge" style="background:${color}">${level.toUpperCase()}</span>`;
+  const safeLevel = level || 'unknown';
+  const color = colors[safeLevel] || '#999';
+  return `<span class="escalation-badge" style="background:${color}">${String(safeLevel).toUpperCase()}</span>`;
 }

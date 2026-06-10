@@ -26,6 +26,8 @@ export async function authFetch(url, options = {}) {
   const res = await fetch(url, { ...options, headers });
   if (res.status === 401) {
     setToken('');
+    // 停止 WebSocket 重连，避免用过期 token 死循环（动态导入避免循环依赖）
+    import('./websocket.js').then(m => m.closeWS()).catch(() => {});
     showLogin('登录已过期，请重新登录');
     throw new Error('unauthorized');
   }

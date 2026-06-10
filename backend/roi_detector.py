@@ -120,6 +120,7 @@ class ROIDetector:
                         "positions": [],
                         "timestamps": [],
                         "in_roi_since": None,
+                        "alerted_loitering": False,
                     }
 
                 track = self._person_tracks[track_key]
@@ -135,7 +136,9 @@ class ROIDetector:
                 if in_polygon:
                     if track["in_roi_since"] is None:
                         track["in_roi_since"] = now
-                    elif now - track["in_roi_since"] >= min_duration:
+                    elif (now - track["in_roi_since"] >= min_duration
+                          and not track.get("alerted_loitering")):
+                        track["alerted_loitering"] = True
                         alerts.append({
                             "roi_id": roi["id"],
                             "roi_name": roi["name"],
@@ -149,6 +152,7 @@ class ROIDetector:
                         })
                 else:
                     track["in_roi_since"] = None
+                    track["alerted_loitering"] = False
 
         return alerts
 
@@ -200,6 +204,11 @@ class ROIDetector:
         alerts.extend(self.check_intrusion(camera_id, bbox_list, track_ids))
         alerts.extend(self.check_loitering(camera_id, bbox_list, track_ids))
         alerts.extend(self.check_gathering(camera_id, bbox_list, track_ids))
+
+        # 定期清理过期跟踪记录，避免 _person_tracks 无限增长
+        if len(self._person_tracks) > 100:
+            self.cleanup_stale_tracks()
+
         return alerts
 
     @staticmethod

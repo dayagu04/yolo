@@ -22,7 +22,7 @@ def upgrade() -> None:
         "alerts",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("timestamp", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("camera_id", sa.Integer(), nullable=False),
+        sa.Column("camera_id", sa.Integer(), nullable=True),
         sa.Column("person_count", sa.Integer(), nullable=False),
         sa.Column("new_track_ids", sa.JSON(), nullable=True),
         sa.Column("screenshot_path", sa.String(512), nullable=True),

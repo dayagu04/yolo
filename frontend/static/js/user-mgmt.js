@@ -1,5 +1,6 @@
 // ── 用户管理模块 ──
 import { authFetch } from './auth.js';
+import { validatePassword } from './utils.js';
 
 let currentUser = null;
 
@@ -34,7 +35,7 @@ export async function showUserManagement() {
         <label>用户名</label>
         <input type="text" id="new-username" placeholder="用户名">
         <label>密码</label>
-        <input type="password" id="new-password" placeholder="密码（至少 6 位）">
+        <input type="password" id="new-password" placeholder="密码（至少 8 位，含大小写字母和数字）">
         <label>角色</label>
         <select id="new-role">
           <option value="viewer">观察者</option>
@@ -57,7 +58,7 @@ export async function showUserManagement() {
         <label>旧密码</label>
         <input type="password" id="old-password" placeholder="旧密码">
         <label>新密码</label>
-        <input type="password" id="new-pwd" placeholder="新密码（至少 6 位）">
+        <input type="password" id="new-pwd" placeholder="新密码（至少 8 位，含大小写字母和数字）">
         <div class="modal-error" id="change-pwd-error"></div>
         <div class="modal-actions">
           <button class="btn" onclick="document.getElementById('change-pwd-modal').classList.remove('open')">取消</button>
@@ -136,7 +137,8 @@ export async function addUser() {
   const errEl = document.getElementById('add-user-error');
 
   if (!username || !password) { errEl.textContent = '用户名和密码必填'; return; }
-  if (password.length < 6) { errEl.textContent = '密码至少 6 位'; return; }
+  const pwdErr = validatePassword(password);
+  if (pwdErr) { errEl.textContent = pwdErr; return; }
 
   try {
     const res = await authFetch('/api/v1/auth/users', {
@@ -200,7 +202,9 @@ export async function submitChangePassword() {
   const newPwd = document.getElementById('new-pwd')?.value;
   const errEl = document.getElementById('change-pwd-error');
 
-  if (!newPwd || newPwd.length < 6) { errEl.textContent = '新密码至少 6 位'; return; }
+  if (!newPwd) { errEl.textContent = '请输入新密码'; return; }
+  const pwdErr = validatePassword(newPwd);
+  if (pwdErr) { errEl.textContent = pwdErr; return; }
 
   try {
     const res = await authFetch(`/api/v1/auth/users/${userId}/password`, {

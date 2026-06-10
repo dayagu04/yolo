@@ -327,7 +327,8 @@ async def legacy_api_redirect(path: str, request: Request):
 
 async def _broadcast(message: dict):
     dead: list[WebSocket] = []
-    for ws in _ws_clients:
+    # 遍历快照，避免 await 让出控制权时其他协程修改 _ws_clients 导致漏发/异常
+    for ws in list(_ws_clients):
         try:
             await ws.send_json(message)
         except Exception as e:
