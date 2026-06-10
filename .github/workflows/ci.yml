@@ -51,7 +51,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r requirements.txt pytest-cov
+      - run: pip install -r requirements-dev.txt
       - name: Run unit tests
         env:
           YOLO_DATABASE_PASSWORD: test_password

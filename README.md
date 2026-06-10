@@ -199,7 +199,9 @@ source venv/bin/activate  # Linux/Mac
 venv\Scripts\activate     # Windows
 
 # 安装依赖
-pip install -r requirements.txt
+pip install -r requirements.txt        # 仅运行时依赖
+# 如需运行测试 / 代码检查，改装开发依赖（已包含运行时依赖）
+pip install -r requirements-dev.txt
 ```
 
 ### 2. 配置

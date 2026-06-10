@@ -3,13 +3,14 @@
 ## 环境准备
 
 ```bash
-# Conda（推荐）
+# Conda（推荐，已含开发/测试依赖）
 conda env create -f environment.yml
 conda activate yolo
 
 # 或 venv（要求 Python 3.11）
 python3.11 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt          # 仅运行时依赖
+pip install -r requirements-dev.txt      # 运行 + 测试 + 代码质量依赖
 ```
 
 ## 开发命令

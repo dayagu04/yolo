@@ -17,14 +17,6 @@ dependencies:
   # 通过 conda 安装的核心二进制依赖（比 pip 更稳定）
   - pip
 
-  # 通过 pip 安装项目依赖（复用 requirements.txt，避免重复维护）
+  # 通过 pip 安装项目依赖（复用 requirements-dev.txt，含运行时 + 开发/测试依赖）
   - pip:
-      - -r requirements.txt
-      # 开发依赖
-      - pytest>=7.4.0
-      - pytest-cov>=4.1.0
-      - pytest-html>=4.1.0
-      - pytest-asyncio>=0.21.0
-      - pytest-timeout>=2.2.0
-      - ruff>=0.1.0
-      - pip-audit>=2.6.0
+      - -r requirements-dev.txt
