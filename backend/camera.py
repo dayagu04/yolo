@@ -1,27 +1,47 @@
-import cv2
+import collections
 import sys
 import threading
 import time
-import collections
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Generator, Callable, Union
+from typing import Callable, Generator, Optional, Union
 
+import cv2
 import numpy as np
 
 ROOT = Path(__file__).parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backend.schemas import AlertMessage, StatusMessage, LogMessage
-from backend.tracker import PersonTracker
-from backend.screenshot import ScreenshotManager
 from backend.roi_detector import ROIDetector
+from backend.schemas import AlertMessage, LogMessage, StatusMessage
+from backend.screenshot import ScreenshotManager
+from backend.tracker import PersonTracker
 
 MODEL_PATH = Path(__file__).parent.parent / "models" / "person_best.pt"
 
 
 class CameraManager:
+    """
+    摄像头管理器 - 负责视频采集、目标检测、人员追踪和告警生成
+
+    功能：
+    - 视频流采集（本地摄像头 / RTSP 网络流）
+    - YOLOv8 人员检测（支持自适应跳帧和推理缓存）
+    - IoU + 中心点双匹配人员追踪
+    - ROI 区域检测（入侵 / 徘徊 / 聚集）
+    - 告警生成和 WebSocket 推送
+    - 截图保存和帧缓冲（录像回放）
+
+    Attributes:
+        camera_id (int): 摄像头 ID
+        source (Union[int, str]): 视频源（0 为本地摄像头，或 RTSP URL）
+        device (str): 推理设备（'cpu' / 'cuda'）
+        tracker (PersonTracker): 人员追踪器
+        screenshot_mgr (ScreenshotManager): 截图管理器
+        roi_detector (ROIDetector): ROI 区域检测器
+    """
+
     def __init__(
         self,
         camera_id: int = 0,
@@ -34,6 +54,20 @@ class CameraManager:
         redis_stats=None,
         screenshot_config: Optional[dict] = None,
     ):
+        """
+        初始化摄像头管理器
+
+        Args:
+            camera_id: 摄像头 ID（用于日志和数据库）
+            source: 视频源（0 为本地摄像头，或 RTSP URL）
+            width: 视频宽度（None 为自动检测）
+            height: 视频高度（None 为自动检测）
+            device: 推理设备（'cpu' / 'cuda'）
+            signal_callback: WebSocket 消息回调函数
+            db_manager: 数据库管理器实例
+            redis_stats: Redis 统计实例
+            screenshot_config: 截图配置字典
+        """
         self.camera_id = camera_id
         self.source = source if source is not None else camera_id
         self.width = width

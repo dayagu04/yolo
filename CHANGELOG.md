@@ -7,6 +7,11 @@
 ### Added
 - **SECURITY.md**：安全规范与最佳实践文档
 - **BUGFIX_REPORT.md**：Bug 修复记录与待办事项
+- **CODE_QUALITY_IMPROVEMENT.md**：代码质量改进报告
+- **frontend/static/js/utils.js**：前端工具模块（HTML 转义、日期格式化、安全 DOM 操作）
+- **test/test_password_validation.py**：密码强度验证测试套件（20 个测试用例）
+- **test/test_multi_camera_integration.py**：多摄像头集成测试（12 个测试用例）
+- **backend/auth.py**：`validate_password_strength()` 密码强度验证函数
 
 ### Fixed
 - **[CRITICAL] SQL 注入风险**（`scripts/init_database.py`）：将 f-string SQL 拼接改为参数化查询
@@ -14,9 +19,18 @@
 - **[MAJOR] 布尔值比较规范**（`backend/database.py`）：修正 SQLAlchemy 布尔值比较，使用 `.is_(True/False)`
 - **[MAJOR] 共享内存资源泄漏**（`backend/capture_process.py`）：改进异常处理，确保 `shm.unlink()` 总是执行
 - **[MAJOR] 时区感知问题**（`backend/database.py`）：`delete_old_alerts` 使用 UTC 时区避免夏令时问题
+- **[HIGH] 前端 XSS 风险**（`frontend/static/js/alerts.js`, `logs.js`）：使用 DOM API 和 textContent 代替 innerHTML
+- **[HIGH] 密码复杂度验证不足**（`backend/routers/auth.py`）：要求 8 位以上 + 大小写字母 + 数字
 
 ### Changed
 - README.md 添加安全章节和文档索引
+- **backend/camera.py**：添加 CameraManager 类和方法的完整文档字符串
+- **backend/camera.py**：整理导入顺序符合 PEP8 规范
+
+### Improved
+- 测试覆盖率：从 103 个测试提升到 135 个测试（+31%）
+- 代码文档：类文档字符串覆盖率提升 33%
+- 安全性：修复 2 个 CRITICAL + 5 个 MAJOR 安全问题
 
 ## [2.0.0] - 2024-12
 
