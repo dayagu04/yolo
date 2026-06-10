@@ -142,13 +142,15 @@ yolo/
 │       ├── 005_add_foreign_keys_and_indexes.py
 │       └── 006_add_alert_composite_index.py
 ├── models/                     # YOLO 模型权重
-├── data/                       # 截图与日志存储
+├── data/                       # 数据集配置 + 运行时数据（截图/日志）
 ├── scripts/                    # 工具脚本
 │   ├── init_database.py       # 数据库初始化
-│   ├── check_camera.py        # 摄像头检测
-│   ├── train.py               # 模型训练
-│   ├── logger.py              # 日志工具
-│   └── function.py            # 公共函数
+│   ├── check_camera.py        # 摄像头连通性检测
+│   ├── train.py               # 本地模型训练
+│   ├── demo_camera.py         # 本地摄像头实时检测演示
+│   ├── check_feishu.py        # 飞书推送手工测试
+│   ├── function.py            # 飞书消息功能函数库
+│   └── logger.py              # 日志工具
 ├── test/                       # 测试套件
 ├── nginx/                      # Nginx 配置
 │   └── nginx.conf
@@ -209,21 +211,39 @@ pip install -r requirements-dev.txt
 ```bash
 # 复制环境变量模板
 cp .env.example .env
+```
 
-# 编辑 .env 文件，配置以下变量：
-# - YOLO_AUTH_INIT_ADMIN_PASSWORD: 管理员密码
-# - DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME: 数据库配置
-# - REDIS_HOST, REDIS_PORT: Redis 配置（可选）
+编辑 `.env`，所有变量统一使用 `YOLO_` 前缀（详见 [.env.example](.env.example)），至少需配置：
+
+```bash
+# 认证（必填）
+YOLO_AUTH_SECRET_KEY=<32 字节随机十六进制字符串>
+YOLO_AUTH_INIT_ADMIN_PASSWORD=<管理员初始密码>
+
+# 数据库（必填）
+YOLO_DATABASE_HOST=localhost        # Docker 部署时改为服务名 mysql
+YOLO_DATABASE_PORT=3306
+YOLO_DATABASE_USER=root
+YOLO_DATABASE_PASSWORD=<数据库密码>
+YOLO_DATABASE_DATABASE=security_monitor   # 须与 docker-compose.yml 的 MYSQL_DATABASE 一致
+
+# Redis（可选）
+YOLO_REDIS_HOST=localhost           # Docker 部署时改为服务名 redis
+YOLO_REDIS_PORT=6379
+YOLO_REDIS_PASSWORD=
 ```
 
 ### 3. 数据库初始化
 
 ```bash
-# 创建数据库
-mysql -u root -p -e "CREATE DATABASE safecam CHARACTER SET utf8mb4;"
+# 创建数据库（名称须与 YOLO_DATABASE_DATABASE 一致）
+mysql -u root -p -e "CREATE DATABASE security_monitor CHARACTER SET utf8mb4;"
 
 # 执行迁移
 alembic upgrade head
+
+# 或使用脚本一键初始化
+make init-db
 ```
 
 ### 4. 启动服务
@@ -243,6 +263,61 @@ python -m backend.main
 ```
 
 访问 http://localhost:8000 使用系统。
+
+## 📋 常用命令
+
+项目通过 [Makefile](Makefile) 封装了常用操作，也可直接调用底层脚本：
+
+```bash
+# ── 服务 ──
+make start            # 生产模式
+make dev              # 开发模式（热重载）
+bash bin/start.sh     # Linux/Mac 生产模式（make 的底层脚本）
+bin\start.bat         # Windows 生产模式
+
+# ── 数据库 ──
+make init-db                                  # 初始化数据库
+alembic upgrade head                          # 执行迁移
+alembic revision --autogenerate -m "描述"     # 生成新迁移
+
+# ── 测试 ──
+make test                  # 运行全部测试
+pytest test/ -m "unit"     # 仅单元测试
+pytest test/ -m "api"      # 仅 API 测试
+
+# ── 代码质量 ──
+make lint                  # ruff 检查 + 格式校验
+ruff format backend/       # 自动格式化
+
+# ── 其他 ──
+make jupyter               # 启动 Jupyter Notebook（本地训练/调试）
+make docker-up             # 启动 Docker 容器
+make docker-down           # 停止 Docker 容器
+make clean                 # 清理 __pycache__ / *.pyc / .DS_Store
+```
+
+> 模型训练在本地进行，不在 Docker 中执行。训练脚本见 [scripts/train.py](scripts/train.py)，数据集路径配置见 [data/dataset.yaml](data/dataset.yaml)。
+
+## 🛠️ 常见开发任务
+
+**添加新的 API 端点**
+1. 在 `backend/routers/` 中创建或编辑路由文件
+2. 在 `backend/main.py` 中注册路由
+3. 在 `backend/schemas.py` 中定义请求/响应模型
+4. 在 `test/` 中补充测试用例
+
+**数据库结构变更**
+1. 修改 `backend/database.py` 中的 ORM 模型
+2. 生成迁移：`alembic revision --autogenerate -m "描述"`
+3. 检查生成的迁移文件，确认 `down_revision` 链正确
+4. 执行迁移：`alembic upgrade head`
+
+**添加前端模块**
+1. 在 `frontend/static/js/` 中创建新模块
+2. 在 `frontend/static/js/app.js` 中导入并注册
+3. 更新 `frontend/service-worker.js` 的缓存版本号以触发更新
+
+更详细的架构约定与编码规范见 [AGENTS.md](AGENTS.md)。
 
 ## 🐳 Docker 部署
 
@@ -342,7 +417,7 @@ database:
   port: 3306
   user: "root"
   password: ""  # 通过环境变量注入
-  database: "safecam"
+  database: "security_monitor"
   charset: "utf8mb4"
   pool_size: 5
   pool_recycle: 3600
@@ -428,7 +503,6 @@ system:
 ## 📚 相关文档
 
 - [CHANGELOG.md](CHANGELOG.md) - 版本变更记录
-- [QUICKSTART.md](QUICKSTART.md) - 快速命令参考
 - [AGENTS.md](AGENTS.md) - 开发规范与架构说明
 - [SECURITY.md](SECURITY.md) - 安全规范与最佳实践
 
