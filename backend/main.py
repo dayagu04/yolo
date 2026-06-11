@@ -535,6 +535,16 @@ async def service_worker():
 if __name__ == "__main__":
 
     logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
-    srv_cfg = config.get("server", {}) if config else {}
-    print("启动监控服务器 -> http://localhost:8000")
-    uvicorn.run(app, host=srv_cfg.get("host", "0.0.0.0"), port=srv_cfg.get("port", 8000), reload=False)
+    # lifespan 未运行时模块级 config 还是空字典，需先显式加载，
+    # 否则 server.host/port 永远只能拿到默认值
+    try:
+        _cfg_file = os.environ.get("CONFIG_FILE", "config.yaml")
+        _bootstrap_cfg = load_and_validate_config(ROOT / _cfg_file)
+        srv_cfg = _bootstrap_cfg.get("server", {})
+    except Exception as _e:
+        print(f"配置加载失败，使用默认值: {_e}")
+        srv_cfg = {}
+    host = srv_cfg.get("host", "0.0.0.0")
+    port = srv_cfg.get("port", 8000)
+    print(f"启动监控服务器 -> http://{host}:{port}")
+    uvicorn.run(app, host=host, port=port, reload=False)

@@ -2,11 +2,17 @@
 邮件通知器
 """
 import asyncio
+import html
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
 from backend.notifiers.base import BaseNotifier
+
+
+def _sanitize_header(value: str) -> str:
+    """清理邮件头字段，移除 CR/LF 防止头注入。"""
+    return str(value).replace("\r", " ").replace("\n", " ").strip()
 
 
 class EmailNotifier(BaseNotifier):
@@ -37,14 +43,22 @@ class EmailNotifier(BaseNotifier):
         timestamp = alert.get("timestamp", "")
         person_count = data.get("person_count", 0)
 
-        subject = f"[安防告警] 摄像头 {camera_id} - {message}"
+        # Subject 走单行字段，必须移除 CR/LF（防邮件头注入）
+        subject = _sanitize_header(f"[安防告警] 摄像头 {camera_id} - {message}")
+
+        # HTML body 中所有用户可控内容都要 escape
+        camera_id_h = html.escape(str(camera_id))
+        timestamp_h = html.escape(str(timestamp))
+        person_count_h = html.escape(str(person_count))
+        message_h = html.escape(str(message))
+
         body = (
             f"<h3>⚠️ 安防告警</h3>"
             f"<table style='border-collapse:collapse;'>"
-            f"<tr><td style='padding:4px 12px;border:1px solid #ddd;font-weight:bold'>摄像头</td><td style='padding:4px 12px;border:1px solid #ddd'>{camera_id}</td></tr>"
-            f"<tr><td style='padding:4px 12px;border:1px solid #ddd;font-weight:bold'>时间</td><td style='padding:4px 12px;border:1px solid #ddd'>{timestamp}</td></tr>"
-            f"<tr><td style='padding:4px 12px;border:1px solid #ddd;font-weight:bold'>人数</td><td style='padding:4px 12px;border:1px solid #ddd'>{person_count} 人</td></tr>"
-            f"<tr><td style='padding:4px 12px;border:1px solid #ddd;font-weight:bold'>消息</td><td style='padding:4px 12px;border:1px solid #ddd'>{message}</td></tr>"
+            f"<tr><td style='padding:4px 12px;border:1px solid #ddd;font-weight:bold'>摄像头</td><td style='padding:4px 12px;border:1px solid #ddd'>{camera_id_h}</td></tr>"
+            f"<tr><td style='padding:4px 12px;border:1px solid #ddd;font-weight:bold'>时间</td><td style='padding:4px 12px;border:1px solid #ddd'>{timestamp_h}</td></tr>"
+            f"<tr><td style='padding:4px 12px;border:1px solid #ddd;font-weight:bold'>人数</td><td style='padding:4px 12px;border:1px solid #ddd'>{person_count_h} 人</td></tr>"
+            f"<tr><td style='padding:4px 12px;border:1px solid #ddd;font-weight:bold'>消息</td><td style='padding:4px 12px;border:1px solid #ddd'>{message_h}</td></tr>"
             f"</table>"
         )
 
@@ -52,11 +66,13 @@ class EmailNotifier(BaseNotifier):
         return await loop.run_in_executor(None, self._send_sync, subject, body)
 
     def _send_sync(self, subject: str, body: str) -> bool:
+        server = None
         try:
             msg = MIMEMultipart("alternative")
             msg["Subject"] = subject
-            msg["From"] = self.from_addr
-            msg["To"] = ", ".join(self.to_addrs)
+            msg["From"] = _sanitize_header(self.from_addr)
+            # 收件人逐个清理，再以逗号拼接
+            msg["To"] = ", ".join(_sanitize_header(a) for a in self.to_addrs)
             msg.attach(MIMEText(body, "html", "utf-8"))
 
             if self.use_ssl:
@@ -67,9 +83,15 @@ class EmailNotifier(BaseNotifier):
 
             server.login(self.smtp_user, self.smtp_password)
             server.sendmail(self.from_addr, self.to_addrs, msg.as_string())
-            server.quit()
             self.logger.info(f"邮件推送成功: {self.to_addrs}")
             return True
         except Exception as e:
             self.logger.error(f"邮件推送异常: {e}")
             return False
+        finally:
+            # 异常路径也要释放 SMTP 连接
+            if server is not None:
+                try:
+                    server.quit()
+                except Exception:
+                    pass
