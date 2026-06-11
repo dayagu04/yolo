@@ -2,12 +2,18 @@
 配置管理模块
 负责加载、校验 config.yaml + config.secrets.yaml，支持环境变量覆盖
 """
-import os
 import copy
+import os
+import tempfile
+import threading
 import yaml
 from pathlib import Path
 from typing import Any, Dict, Optional
 import logging
+
+
+# 进程级写锁，避免同进程多协程/线程并发写 config.yaml 互相覆盖
+_CONFIG_WRITE_LOCK = threading.Lock()
 
 
 class ConfigError(Exception):
@@ -222,3 +228,38 @@ def load_and_validate_config(config_path: Path) -> Dict[str, Any]:
     """加载并校验配置（便捷函数）"""
     manager = ConfigManager(config_path)
     return manager.load()
+
+
+def save_config_atomic(config_path: Path, config: dict) -> None:
+    """原子地写回 config.yaml。
+
+    步骤：
+    1. 同进程加锁（_CONFIG_WRITE_LOCK），串行化并发写入
+    2. 写入同目录下临时文件并 fsync
+    3. os.replace() 原子性替换
+    任一步异常都不会留下半截文件覆盖原配置。
+    """
+    config_path = Path(config_path)
+    parent = config_path.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    with _CONFIG_WRITE_LOCK:
+        # delete=False 让我们手动管理生命周期；同目录确保 os.replace 是原子的
+        tmp_fd, tmp_path = tempfile.mkstemp(prefix=".config.", suffix=".yaml.tmp", dir=str(parent))
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                yaml.dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    # 部分文件系统（如某些 tmpfs）不支持 fsync，忽略
+                    pass
+            os.replace(tmp_path, config_path)
+        except Exception:
+            # 写失败时清理临时文件，原文件保持完整
+            try:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise

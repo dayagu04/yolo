@@ -1,6 +1,5 @@
 """摄像头管理路由"""
 import os
-import yaml
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, Depends, Query
 from backend.auth import get_current_user, require_operator, require_admin
@@ -151,12 +150,12 @@ async def edit_camera(camera_id: int, request: Request, _user: dict = Depends(re
                 cam_cfg["location"] = body["location"]
             break
 
-    # 持久化到 config.yaml
+    # 持久化到 config.yaml（原子写入，防并发覆盖与中断损坏）
     config_file = getattr(request.app.state, "config_file", None)
     if config_file:
         try:
-            with open(config_file, "w", encoding="utf-8") as f:
-                yaml.dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+            from backend.config import save_config_atomic
+            save_config_atomic(config_file, config)
         except Exception as e:
             logger = get_logger(request)
             if logger:

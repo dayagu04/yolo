@@ -1,14 +1,31 @@
 """
 后端结构化日志系统（JSON + 内存环形缓冲 + 文件持久化）
 """
-from collections import deque
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional
 import json
 import logging
 import logging.handlers
 import sys
+import threading
+from collections import deque
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Optional
+
+
+# 敏感字段：写日志前一律脱敏。匹配规则按 key 名小写包含。
+_SENSITIVE_KEY_HINTS = ("password", "secret", "token", "api_key", "apikey", "authorization")
+
+
+def _sanitize(value: Any) -> Any:
+    """递归脱敏：dict 中名字命中敏感关键词的字段值替换为 ***"""
+    if isinstance(value, dict):
+        return {
+            k: ("***" if any(h in str(k).lower() for h in _SENSITIVE_KEY_HINTS) else _sanitize(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize(v) for v in value]
+    return value
 
 
 class StructuredLogger:
@@ -20,6 +37,8 @@ class StructuredLogger:
         log_to_file: bool = True,
     ):
         self._buffer = deque(maxlen=max_entries)
+        # 保护 _buffer 的并发读写：写入来自摄像头线程，读取来自事件循环线程
+        self._buffer_lock = threading.Lock()
         self.logger = logging.getLogger(name)
         self.logger.setLevel(logging.INFO)
 
@@ -55,9 +74,11 @@ class StructuredLogger:
             "event": event,
             "camera_id": camera_id,
             "message": message,
-            "data": data or {},
+            "data": _sanitize(data) if data else {},
         }
-        self._buffer.append(payload)
+        # 锁内 append + 序列化前的快照，避免与 get_recent_logs 的 list(...) 撕裂读
+        with self._buffer_lock:
+            self._buffer.append(payload)
         line = json.dumps(payload, ensure_ascii=False)
 
         if level == "error":
@@ -71,7 +92,8 @@ class StructuredLogger:
 
     def get_recent_logs(self, limit: int = 100) -> list[dict]:
         limit = max(1, min(500, limit))
-        return list(self._buffer)[-limit:]
+        with self._buffer_lock:
+            return list(self._buffer)[-limit:]
 
 
 structured_logger = StructuredLogger()
