@@ -189,26 +189,11 @@ def _init_admin(db: DatabaseManager, cfg: dict):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _event_loop, config, db_manager, redis_stats, _cleanup_task, _escalation_task
+    global _event_loop, db_manager, redis_stats, _cleanup_task, _escalation_task
     global feishu_notifier, _extra_notifiers
     _event_loop = asyncio.get_running_loop()
 
-    config_file = os.environ.get("CONFIG_FILE", "config.yaml")
-    try:
-        config = load_and_validate_config(ROOT / config_file)
-        print(f"已加载配置文件: {config_file}")
-
-        # CORS — 在 config 加载后设置（修复时序 Bug）
-        _cors_origins = config.get("auth", {}).get("cors_origins", ["http://localhost:8000", "http://127.0.0.1:8000"])
-        app.add_middleware(CORSMiddleware, allow_origins=_cors_origins, allow_credentials=True,
-                           allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-                           allow_headers=["Authorization", "Content-Type"])
-    except ConfigError as e:
-        print(f"\n[ERROR] 配置校验失败: {e}\n")
-        raise SystemExit(1)
-    except Exception as e:
-        print(f"\n[ERROR] 配置加载异常: {e}\n")
-        raise SystemExit(1)
+    # config 已在模块级加载（见文件底部 _load_startup_config），此处直接使用
 
     if config.get("database"):
         try:
@@ -252,7 +237,7 @@ async def lifespan(app: FastAPI):
 
     # 存入 app.state 供 routers 使用
     app.state.config = config
-    app.state.config_file = str(ROOT / config_file)
+    app.state.config_file = _CONFIG_FILE_PATH
     app.state.db_manager = db_manager
     app.state.redis_stats = redis_stats
     app.state.cameras = cameras
@@ -294,7 +279,41 @@ async def lifespan(app: FastAPI):
     structured_logger.log("info", "app.shutdown", "服务已关闭")
 
 
+# ------------------------------------------------------------------ #
+#  启动期配置加载（必须在 app = FastAPI(...) 之前完成，
+#  以便 CORS 等中间件用真实配置注册）
+# ------------------------------------------------------------------ #
+
+_CONFIG_FILE = os.environ.get("CONFIG_FILE", "config.yaml")
+_CONFIG_FILE_PATH = str(ROOT / _CONFIG_FILE)
+try:
+    config = load_and_validate_config(ROOT / _CONFIG_FILE)
+    print(f"已加载配置文件: {_CONFIG_FILE}")
+except ConfigError as e:
+    print(f"\n[ERROR] 配置校验失败: {e}\n")
+    raise SystemExit(1)
+except Exception as e:
+    print(f"\n[ERROR] 配置加载异常: {e}\n")
+    raise SystemExit(1)
+
+
 app = FastAPI(title="智能视频监控", lifespan=lifespan)
+
+
+# ------------------------------------------------------------------ #
+#  CORS — 必须在 app 创建后立即注册，不能放进 lifespan
+#  （Starlette 中间件栈在第一个请求前锁定，lifespan 内 add_middleware 不生效）
+# ------------------------------------------------------------------ #
+
+_cors_origins = config.get("auth", {}).get("cors_origins",
+                                           ["http://localhost:8000", "http://127.0.0.1:8000"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+)
 
 
 # ------------------------------------------------------------------ #
@@ -535,15 +554,8 @@ async def service_worker():
 if __name__ == "__main__":
 
     logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
-    # lifespan 未运行时模块级 config 还是空字典，需先显式加载，
-    # 否则 server.host/port 永远只能拿到默认值
-    try:
-        _cfg_file = os.environ.get("CONFIG_FILE", "config.yaml")
-        _bootstrap_cfg = load_and_validate_config(ROOT / _cfg_file)
-        srv_cfg = _bootstrap_cfg.get("server", {})
-    except Exception as _e:
-        print(f"配置加载失败，使用默认值: {_e}")
-        srv_cfg = {}
+    # config 已在模块顶部加载完毕，可直接读取
+    srv_cfg = config.get("server", {})
     host = srv_cfg.get("host", "0.0.0.0")
     port = srv_cfg.get("port", 8000)
     print(f"启动监控服务器 -> http://{host}:{port}")

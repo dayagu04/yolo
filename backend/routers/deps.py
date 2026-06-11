@@ -43,12 +43,8 @@ def audit(request, username: str, action: str, resource: str = "", detail: str =
     db = get_db_optional(request)
     if db:
         try:
-            ip = ""
-            forwarded = request.headers.get("x-forwarded-for")
-            if forwarded:
-                ip = forwarded.split(",")[0].strip()
-            elif request.client:
-                ip = request.client.host
+            from backend.auth import get_client_ip
+            ip = get_client_ip(request)
             db.create_audit_log(
                 username=username, action=action, resource=resource,
                 detail=detail, ip_address=ip,

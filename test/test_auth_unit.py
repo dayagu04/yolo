@@ -145,3 +145,65 @@ class TestToken:
         token = jwt.encode(payload, os.environ["YOLO_AUTH_SECRET_KEY"], algorithm="HS256")
         with pytest.raises(HTTPException):
             decode_token(token)
+
+
+# ── 可信代理与 X-Forwarded-For 处理（M1 回归） ──
+
+class TestClientIPResolution:
+    """get_client_ip 的可信代理白名单：未配置时不信 XFF，配置后只信白名单代理"""
+
+    def _mock_request(self, client_host: str, xff: str = None):
+        req = MagicMock()
+        req.client = MagicMock()
+        req.client.host = client_host
+        headers = {}
+        if xff is not None:
+            headers["x-forwarded-for"] = xff
+        req.headers = headers
+        return req
+
+    def test_xff_ignored_when_no_trusted_proxies_configured(self):
+        """默认未配置可信代理时，必须忽略 XFF（防伪造）"""
+        from backend import auth as auth_mod
+        with patch.object(auth_mod, "_TRUSTED_PROXY_NETS", []):
+            req = self._mock_request("203.0.113.5", xff="1.2.3.4")
+            assert auth_mod.get_client_ip(req) == "203.0.113.5"
+
+    def test_xff_honored_only_for_trusted_proxy(self):
+        """请求来自白名单代理时才采纳 XFF"""
+        import ipaddress
+        from backend import auth as auth_mod
+        trusted = [ipaddress.ip_network("10.0.0.0/8")]
+        with patch.object(auth_mod, "_TRUSTED_PROXY_NETS", trusted):
+            # 直连方在白名单内，应采用 XFF
+            req = self._mock_request("10.0.0.5", xff="1.2.3.4")
+            assert auth_mod.get_client_ip(req) == "1.2.3.4"
+
+    def test_xff_ignored_for_untrusted_proxy(self):
+        """请求来自非白名单代理时，不采用 XFF"""
+        import ipaddress
+        from backend import auth as auth_mod
+        trusted = [ipaddress.ip_network("10.0.0.0/8")]
+        with patch.object(auth_mod, "_TRUSTED_PROXY_NETS", trusted):
+            req = self._mock_request("203.0.113.5", xff="1.2.3.4")
+            assert auth_mod.get_client_ip(req) == "203.0.113.5"
+
+    def test_no_xff_falls_back_to_direct(self):
+        from backend import auth as auth_mod
+        req = self._mock_request("203.0.113.5", xff=None)
+        assert auth_mod.get_client_ip(req) == "203.0.113.5"
+
+    def test_rate_limit_uses_direct_ip_under_xff_forge(self):
+        """限流必须按真实直连 IP 计数，攻击者伪造 XFF 不能绕过"""
+        from backend import auth as auth_mod
+        from backend.auth import check_rate_limit, _rate_limits
+        # 未配置可信代理 → XFF 一律忽略
+        with patch.object(auth_mod, "_TRUSTED_PROXY_NETS", []):
+            _rate_limits.clear()
+            # 同一直连 IP，但每次伪造不同 XFF
+            for i in range(5):
+                req = self._mock_request("198.51.100.10", xff=f"1.1.1.{i}")
+                check_rate_limit(req, max_requests=100, window=60)
+            # 全部应记到同一直连 IP 上
+            assert len(_rate_limits["198.51.100.10"]) == 5
+            assert "1.1.1.0" not in _rate_limits

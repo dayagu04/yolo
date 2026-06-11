@@ -129,13 +129,49 @@ def clear_login_failures(username: str) -> None:
 #  请求限流
 # ------------------------------------------------------------------ #
 
-def check_rate_limit(request: Request, max_requests: int = _DEFAULT_RATE, window: int = _DEFAULT_WINDOW) -> None:
-    """简单的内存限流，按客户端 IP 限制。支持 X-Forwarded-For。"""
+# 可信代理白名单（CIDR 列表，逗号分隔）。仅当请求来自这些代理时才信任 X-Forwarded-For。
+# 未配置时默认不信任 XFF（最安全），等同于直接读 request.client.host。
+import ipaddress as _ipaddress
+
+_TRUSTED_PROXIES_RAW = os.environ.get("YOLO_TRUSTED_PROXIES", "").strip()
+_TRUSTED_PROXY_NETS: list = []
+if _TRUSTED_PROXIES_RAW:
+    for _p in _TRUSTED_PROXIES_RAW.split(","):
+        _p = _p.strip()
+        if not _p:
+            continue
+        try:
+            _TRUSTED_PROXY_NETS.append(_ipaddress.ip_network(_p, strict=False))
+        except ValueError:
+            # 静默忽略非法 CIDR，不影响启动
+            pass
+
+
+def get_client_ip(request: Request) -> str:
+    """获取客户端真实 IP。
+
+    仅当直连方（request.client.host）位于可信代理白名单 (YOLO_TRUSTED_PROXIES) 时，
+    才采纳 X-Forwarded-For 的最左侧 IP；否则一律使用直连 IP，防止伪造头绕过限流/锁定。
+    """
+    direct_ip = request.client.host if request.client else "unknown"
+    if not _TRUSTED_PROXY_NETS:
+        return direct_ip
+    try:
+        direct_addr = _ipaddress.ip_address(direct_ip)
+    except ValueError:
+        return direct_ip
+    if not any(direct_addr in net for net in _TRUSTED_PROXY_NETS):
+        return direct_ip
     forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        client_ip = forwarded.split(",")[0].strip()
-    else:
-        client_ip = request.client.host if request.client else "unknown"
+    if not forwarded:
+        return direct_ip
+    candidate = forwarded.split(",")[0].strip()
+    return candidate or direct_ip
+
+
+def check_rate_limit(request: Request, max_requests: int = _DEFAULT_RATE, window: int = _DEFAULT_WINDOW) -> None:
+    """简单的内存限流，按客户端 IP 限制。"""
+    client_ip = get_client_ip(request)
     now = time.time()
     requests = _rate_limits[client_ip]
     _rate_limits[client_ip] = [t for t in requests if now - t < window]
