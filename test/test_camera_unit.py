@@ -2,6 +2,7 @@
 Camera 模块单元测试（对应 PersonTracker + ScreenshotManager 拆分后的接口）
 """
 import pytest
+import time
 import numpy as np
 from unittest.mock import Mock, patch, MagicMock
 from pathlib import Path
@@ -44,7 +45,9 @@ class TestCameraManager:
         assert camera.detection_enabled is True
         assert camera.conf_threshold == 0.5
         assert camera.running is False
-        assert camera.cap is None
+        assert camera.video_capture is not None
+        assert camera.detector is not None
+        assert camera.alert_manager is not None
 
     @patch('cv2.VideoCapture')
     def test_open_camera_success(self, mock_cv2, camera):
@@ -55,10 +58,10 @@ class TestCameraManager:
         mock_cap.read.return_value = (True, np.zeros((480, 640, 3), dtype=np.uint8))
         mock_cv2.return_value = mock_cap
 
-        result = camera._open_camera()
+        result = camera.video_capture.open()
 
         assert result is True
-        assert camera.cap is not None
+        assert camera.video_capture._cap is not None
 
     @patch('cv2.VideoCapture')
     def test_open_camera_failure(self, mock_cv2, camera):
@@ -67,30 +70,41 @@ class TestCameraManager:
         mock_cap.isOpened.return_value = False
         mock_cv2.return_value = mock_cap
 
-        result = camera._open_camera()
+        result = camera.video_capture.open()
 
         assert result is False
 
     def test_close_camera(self, camera):
         """测试关闭摄像头"""
         mock_cap = Mock()
-        camera.cap = mock_cap
-        camera.connected = True
+        camera.video_capture._cap = mock_cap
+        camera.video_capture._connected = True
 
-        camera._close_camera()
+        camera.video_capture.close()
 
         mock_cap.release.assert_called_once()
-        assert camera.cap is None
-        assert camera.connected is False
+        assert camera.video_capture._cap is None
+        assert camera.video_capture._connected is False
 
     def test_get_status(self, camera):
         """测试获取状态"""
         camera.running = True
-        camera.connected = True
-        camera._model = Mock()
+        camera.video_capture._connected = True
+        camera.detector._model = Mock()
+        camera.detector._model_loaded = True
         camera._fps = 30.0
-        camera.width = 640
-        camera.height = 480
+        camera.video_capture._cap = Mock()
+        camera.video_capture._cap.get.side_effect = lambda prop: 640.0 if prop == 3 else 480.0
+
+        # 直接设置内部状态
+        camera.tracker._tracks = {
+            1: {"last_update": time.time()},
+            2: {"last_update": time.time()},
+            3: {"last_update": time.time()},
+            4: {"last_update": time.time()},
+            5: {"last_update": time.time()},
+        }
+        camera.alert_manager.alert_count = 10
 
         status = camera.get_status()
 
@@ -100,13 +114,20 @@ class TestCameraManager:
         assert status["model_loaded"] is True
         assert status["fps"] == 30.0
         assert status["resolution"] == "640x480"
+        assert status["active_tracks"] == 5
+        assert status["alert_total"] == 10
 
     def test_get_status_no_model(self, camera):
         """测试无模型时的状态"""
+        # 直接设置内部状态
+        camera.tracker._tracks = {}
+        camera.alert_manager.alert_count = 0
+
         status = camera.get_status()
 
         assert status["model_loaded"] is False
         assert status["running"] is False
+        assert status["active_tracks"] == 0
 
     def test_get_frame_no_frame(self, camera):
         """测试获取帧（无帧）"""
@@ -147,18 +168,6 @@ class TestCameraManager:
         # 不应该抛出异常
         camera._emit_log("info", "test.event", "测试消息")
 
-    def test_emit_status_with_callback(self, camera):
-        """测试状态发送（有回调）"""
-        callback = Mock()
-        camera.signal_callback = callback
-
-        camera._emit_status("info", "测试状态", {"connected": True})
-
-        callback.assert_called_once()
-        call_args = callback.call_args[0][0]
-        assert call_args["type"] == "status"
-        assert call_args["level"] == "info"
-
     def test_now_iso_format(self, camera):
         """测试时间戳格式"""
         from datetime import datetime
@@ -193,37 +202,40 @@ class TestCameraManager:
     def test_camera_stop_not_running(self, camera):
         """测试停止未运行的摄像头"""
         camera.running = False
-        camera.cap = None
+        camera.video_capture._cap = None
 
         # 不应该抛出异常
         camera.stop()
 
     def test_camera_start_sets_running(self, camera):
         """测试启动设置运行状态"""
-        with patch.object(camera, '_load_model'):
-            with patch('threading.Thread') as mock_thread:
-                mock_t = Mock()
-                mock_thread.return_value = mock_t
+        # Mock detector 已加载
+        camera.detector._model_loaded = True
+        camera.detector._model = Mock()
 
-                camera.start()
+        with patch('threading.Thread') as mock_thread:
+            mock_t = Mock()
+            mock_thread.return_value = mock_t
 
-                assert camera.running is True
-                mock_t.start.assert_called_once()
+            camera.start()
 
-                # 清理
-                camera.running = False
+            assert camera.running is True
+            mock_t.start.assert_called_once()
+
+            # 清理
+            camera.running = False
 
     def test_alert_cooldown_proxy(self, camera):
-        """测试告警冷却时间属性代理到 tracker"""
+        """测试告警冷却时间属性代理到 alert_manager"""
         camera._alert_cooldown_sec = 30.0
-        assert camera.tracker.alert_cooldown_sec == 30.0
+        assert camera.alert_manager.cooldown_sec == 30.0
         assert camera._alert_cooldown_sec == 30.0
 
     def test_track_ttl_proxy(self, camera):
-        """测试轨迹 TTL 属性代理到 tracker"""
-        camera._track_ttl_sec = 10.0
-        assert camera.tracker.track_ttl_sec == 10.0
-        assert camera._track_ttl_sec == 10.0
+        """测试追踪 TTL 属性代理到 tracker"""
+        camera._track_ttl_sec = 60.0
+        assert camera.tracker.ttl_sec == 60.0
+        assert camera._track_ttl_sec == 60.0
 
 
 @pytest.mark.unit
