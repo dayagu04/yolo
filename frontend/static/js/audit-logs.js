@@ -1,5 +1,6 @@
 // ── 审计日志模块 ──
 import { authFetch } from './auth.js';
+import { escapeHtml } from './utils.js';
 
 let auditPage = 0;
 const PAGE_SIZE = 50;
@@ -73,11 +74,11 @@ function renderAuditTable(data, wrap) {
           ${logs.length ? logs.map(l => `
             <tr>
               <td>${formatTime(l.timestamp)}</td>
-              <td>${l.username}</td>
-              <td><span class="action-badge">${l.action}</span></td>
-              <td>${l.resource || '—'}</td>
-              <td class="detail-cell">${l.detail || '—'}</td>
-              <td>${l.ip_address || '—'}</td>
+              <td>${escapeHtml(l.username)}</td>
+              <td><span class="action-badge">${escapeHtml(l.action)}</span></td>
+              <td>${escapeHtml(l.resource || '—')}</td>
+              <td class="detail-cell">${escapeHtml(l.detail || '—')}</td>
+              <td>${escapeHtml(l.ip_address || '—')}</td>
             </tr>
           `).join('') : '<tr><td colspan="6" class="empty-row">暂无日志</td></tr>'}
         </tbody>
