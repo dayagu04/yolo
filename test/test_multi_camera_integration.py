@@ -106,10 +106,10 @@ class TestCameraConfigManagement:
     def test_camera_device_setting(self):
         """测试摄像头设备配置"""
         cam_cpu = CameraManager(camera_id=1, source=0, device="cpu")
-        assert cam_cpu.device == "cpu"
+        assert cam_cpu.detector.device == "cpu"
 
         cam_cuda = CameraManager(camera_id=2, source=1, device="cuda")
-        assert cam_cuda.device == "cuda"
+        assert cam_cuda.detector.device == "cuda"
 
 
 @pytest.mark.integration
