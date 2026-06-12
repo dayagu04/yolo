@@ -338,22 +338,30 @@ class TestDynamicCameraAPI:
 
 @pytest.mark.unit
 class TestCameraSignalCallback:
-    """_camera_signal_callback 线程安全测试（P1 修复验证）"""
+    """_make_camera_signal_callback 线程安全测试（P1 修复验证）"""
+
+    def _make_app(self, feishu_notifier=None, extra_notifiers=None):
+        """构造带 state 的 mock app"""
+        app = Mock()
+        app.state.feishu_notifier = feishu_notifier
+        app.state._extra_notifiers = extra_notifiers or []
+        return app
 
     def test_feishu_uses_call_soon_threadsafe(self):
         """飞书推送通过 call_soon_threadsafe 调度，不直接调用 create_task"""
-        from backend.main import _camera_signal_callback
+        from backend.main import _make_camera_signal_callback
 
         mock_loop = Mock()
         mock_notifier = AsyncMock()
+        app = self._make_app(feishu_notifier=mock_notifier)
 
         alert_msg = {"type": "alert", "level": "high", "data": {"screenshot_path": None}}
 
         with patch('backend.main._event_loop', mock_loop), \
-             patch('backend.main.feishu_notifier', mock_notifier), \
              patch('backend.main._dispatch_signal'):
             mock_loop.is_running.return_value = True
-            _camera_signal_callback(alert_msg)
+            callback = _make_camera_signal_callback(app)
+            callback(alert_msg)
 
         # 至少调用一次，且参数中包含 notifier.send_alert 生成的协程
         assert mock_loop.call_soon_threadsafe.call_count >= 1
@@ -362,53 +370,67 @@ class TestCameraSignalCallback:
 
     def test_no_feishu_no_threadsafe_call(self):
         """无飞书 notifier 时不调用 call_soon_threadsafe"""
-        from backend.main import _camera_signal_callback
+        from backend.main import _make_camera_signal_callback
 
         mock_loop = Mock()
+        app = self._make_app(feishu_notifier=None)
         alert_msg = {"type": "alert", "level": "high", "data": {}}
 
         with patch('backend.main._event_loop', mock_loop), \
-             patch('backend.main.feishu_notifier', None), \
              patch('backend.main._dispatch_signal'):
-            _camera_signal_callback(alert_msg)
+            mock_loop.is_running.return_value = True
+            callback = _make_camera_signal_callback(app)
+            callback(alert_msg)
 
-        # feishu_notifier 为 None，不应触发 call_soon_threadsafe
+        # feishu_notifier 为 None 且无其他通道，不应触发 call_soon_threadsafe
         mock_loop.call_soon_threadsafe.assert_not_called()
 
     """摄像头工厂函数测试"""
 
+    def _app_with_cameras(self, cameras_dict):
+        app = Mock()
+        app.state.cameras = cameras_dict
+        app.state.db_manager = None
+        app.state.redis_stats = None
+        app.state.feishu_notifier = None
+        app.state._extra_notifiers = []
+        return app
+
     def test_get_camera_creates_new(self):
         """测试获取不存在的摄像头会创建新实例"""
-        from backend.main import get_camera, cameras
+        from backend.main import get_camera
 
-        cameras.clear()
+        cams = {}
+        app = self._app_with_cameras(cams)
 
         with patch('backend.main.config', {"cameras": [], "detection": {}, "alert": {}}):
             with patch('backend.main.CameraManager') as mock_cm:
                 mock_instance = Mock()
                 mock_cm.return_value = mock_instance
 
-                cam = get_camera(0)
+                cam = get_camera(app, 0)
 
                 assert cam is mock_instance
-                assert 0 in cameras
+                assert 0 in cams
 
     def test_get_camera_returns_existing(self):
         """测试获取已存在的摄像头返回同一实例"""
-        from backend.main import get_camera, cameras
+        from backend.main import get_camera
 
         mock_cam = Mock()
-        cameras[0] = mock_cam
+        cams = {0: mock_cam}
+        app = self._app_with_cameras(cams)
 
-        cam = get_camera(0)
+        cam = get_camera(app, 0)
 
         assert cam is mock_cam
 
     def test_get_camera_with_config(self):
         """测试使用配置创建摄像头"""
-        from backend.main import get_camera, cameras
+        from backend.main import get_camera
 
-        cameras.clear()
+        cams = {}
+        app = self._app_with_cameras(cams)
 
         cam_cfg = {
             "id": 1,
@@ -422,7 +444,7 @@ class TestCameraSignalCallback:
                 mock_instance = Mock()
                 mock_cm.return_value = mock_instance
 
-                cam = get_camera(1, cam_cfg)
+                cam = get_camera(app, 1, cam_cfg)
 
                 assert cam is mock_instance
                 mock_cm.assert_called_once()
@@ -509,9 +531,10 @@ class TestCleanupTask:
         (old_dir / "test.jpg").write_text("old")
         (recent_dir / "test.jpg").write_text("recent")
 
+        app = Mock()
+        app.state.db_manager = None
         with patch('backend.main.ROOT', tmp_path.parent):
-            with patch('backend.main.db_manager', None):
-                _do_cleanup(str(tmp_path.name), retention_days=30)
+            _do_cleanup(app, str(tmp_path.name), retention_days=30)
 
         assert not old_dir.exists()
         assert recent_dir.exists()
@@ -523,8 +546,9 @@ class TestCleanupTask:
         mock_db = Mock()
         mock_db.delete_old_alerts.return_value = 10
 
-        with patch('backend.main.db_manager', mock_db):
-            with patch('backend.main.ROOT', Path("/tmp")):
-                _do_cleanup("screenshots", retention_days=30)
+        app = Mock()
+        app.state.db_manager = mock_db
+        with patch('backend.main.ROOT', Path("/tmp")):
+            _do_cleanup(app, "screenshots", retention_days=30)
 
         mock_db.delete_old_alerts.assert_called_once_with(days=30)

@@ -49,28 +49,31 @@ _extra_notifiers: list = []
 
 
 # ------------------------------------------------------------------ #
-#  截图定时清理任务
+#  截图定时清理任务（工厂函数：闭包捕获 app.state）
 # ------------------------------------------------------------------ #
 
-async def _run_cleanup():
-    schedule = config.get("system", {}).get("cleanup_schedule", "03:00")
-    retention_days = config.get("alert", {}).get("screenshot", {}).get("retention_days", 30)
-    save_dir = config.get("alert", {}).get("screenshot", {}).get("save_dir", "data/screenshots")
+def _make_cleanup_task(app):
+    """返回清理任务协程，闭包捕获 app.state.db_manager"""
+    async def _run_cleanup():
+        schedule = config.get("system", {}).get("cleanup_schedule", "03:00")
+        retention_days = config.get("alert", {}).get("screenshot", {}).get("retention_days", 30)
+        save_dir = config.get("alert", {}).get("screenshot", {}).get("save_dir", "data/screenshots")
 
-    while True:
-        now = datetime.now()
-        try:
-            hour, minute = map(int, schedule.split(":"))
-        except (ValueError, AttributeError):
-            hour, minute = 3, 0
-        next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if next_run <= now:
-            next_run += timedelta(days=1)
-        await asyncio.sleep((next_run - now).total_seconds())
-        await asyncio.get_running_loop().run_in_executor(None, _do_cleanup, save_dir, retention_days)
+        while True:
+            now = datetime.now()
+            try:
+                hour, minute = map(int, schedule.split(":"))
+            except (ValueError, AttributeError):
+                hour, minute = 3, 0
+            next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if next_run <= now:
+                next_run += timedelta(days=1)
+            await asyncio.sleep((next_run - now).total_seconds())
+            await asyncio.get_running_loop().run_in_executor(None, _do_cleanup, app, save_dir, retention_days)
+    return _run_cleanup()
 
 
-def _do_cleanup(save_dir: str, retention_days: int):
+def _do_cleanup(app, save_dir: str, retention_days: int):
     import shutil
     try:
         screenshots_root = ROOT / save_dir
@@ -88,6 +91,7 @@ def _do_cleanup(save_dir: str, retention_days: int):
                 except ValueError:
                     pass
         db_deleted = 0
+        db_manager = getattr(app.state, "db_manager", None)
         if db_manager:
             db_deleted = db_manager.delete_old_alerts(days=retention_days)
         structured_logger.log("info", "system.cleanup_done",
@@ -98,7 +102,7 @@ def _do_cleanup(save_dir: str, retention_days: int):
 
 
 # ------------------------------------------------------------------ #
-#  告警升级调度器
+#  告警升级调度器（工厂函数）
 # ------------------------------------------------------------------ #
 
 ESCALATION_CHAIN = {
@@ -107,68 +111,53 @@ ESCALATION_CHAIN = {
 }
 
 
-async def _run_escalation():
-    while True:
-        await asyncio.sleep(60)
-        if not db_manager:
-            continue
-        try:
-            now = datetime.now()
-            for from_level, rule in ESCALATION_CHAIN.items():
-                alerts = await _event_loop.run_in_executor(
-                    None, lambda fl=from_level: db_manager.get_unprocessed_alerts(
-                        older_than_sec=rule["after_sec"]))
-                for alert in alerts:
-                    if alert.get("level") != from_level:
-                        continue
-                    alert_ts = alert.get("timestamp")
-                    if isinstance(alert_ts, str):
-                        alert_ts = datetime.fromisoformat(alert_ts)
-                    if (now - alert_ts).total_seconds() < rule["after_sec"]:
-                        continue
-                    success = await _event_loop.run_in_executor(
-                        None, lambda a=alert: db_manager.escalate_alert(
-                            a["id"], rule["to_level"],
-                            f"超过 {rule['after_sec']}s 未处理，自动升级"))
-                    if success:
-                        structured_logger.log("info", "alert.escalated",
-                                              f"告警 #{alert['id']} 自动升级: {from_level}→{rule['to_level']}")
-                        escalation_msg = {
-                            "type": "alert", "level": rule["to_level"],
-                            "message": f"告警升级: #{alert['id']} {from_level}→{rule['to_level']}",
-                            "camera_id": alert.get("camera_id"),
-                            "data": {"escalation": True, "alert_id": alert["id"],
-                                     "from_level": from_level, "to_level": rule["to_level"]},
-                        }
-                        if feishu_notifier:
-                            _event_loop.call_soon_threadsafe(
-                                asyncio.create_task, feishu_notifier.send_alert(escalation_msg))
-                        for notifier in _extra_notifiers:
-                            _event_loop.call_soon_threadsafe(
-                                asyncio.create_task, notifier.send_alert(escalation_msg))
-        except Exception as e:
-            structured_logger.log("error", "escalation.failed", f"告警升级调度失败: {e}")
-
-
-# ------------------------------------------------------------------ #
-#  审计日志辅助
-# ------------------------------------------------------------------ #
-
-def _audit(username: str, action: str, resource: str = "", detail: str = "",
-           ip_address: str = "", user_agent: str = ""):
-    if db_manager:
-        try:
-            db_manager.create_audit_log(username=username, action=action, resource=resource,
-                                        detail=detail, ip_address=ip_address, user_agent=user_agent)
-        except Exception as e:
-            logging.getLogger(__name__).debug(f"审计日志写入失败: {e}")
-
-
-def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else ""
+def _make_escalation_task(app):
+    """返回升级调度器协程，闭包捕获 app.state.*"""
+    async def _run_escalation():
+        while True:
+            await asyncio.sleep(60)
+            db_manager = getattr(app.state, "db_manager", None)
+            if not db_manager:
+                continue
+            try:
+                now = datetime.now()
+                for from_level, rule in ESCALATION_CHAIN.items():
+                    alerts = await _event_loop.run_in_executor(
+                        None, lambda fl=from_level: db_manager.get_unprocessed_alerts(
+                            older_than_sec=rule["after_sec"]))
+                    for alert in alerts:
+                        if alert.get("level") != from_level:
+                            continue
+                        alert_ts = alert.get("timestamp")
+                        if isinstance(alert_ts, str):
+                            alert_ts = datetime.fromisoformat(alert_ts)
+                        if (now - alert_ts).total_seconds() < rule["after_sec"]:
+                            continue
+                        success = await _event_loop.run_in_executor(
+                            None, lambda a=alert: db_manager.escalate_alert(
+                                a["id"], rule["to_level"],
+                                f"超过 {rule['after_sec']}s 未处理，自动升级"))
+                        if success:
+                            structured_logger.log("info", "alert.escalated",
+                                                  f"告警 #{alert['id']} 自动升级: {from_level}→{rule['to_level']}")
+                            escalation_msg = {
+                                "type": "alert", "level": rule["to_level"],
+                                "message": f"告警升级: #{alert['id']} {from_level}→{rule['to_level']}",
+                                "camera_id": alert.get("camera_id"),
+                                "data": {"escalation": True, "alert_id": alert["id"],
+                                         "from_level": from_level, "to_level": rule["to_level"]},
+                            }
+                            feishu_notifier = getattr(app.state, "feishu_notifier", None)
+                            if feishu_notifier:
+                                _event_loop.call_soon_threadsafe(
+                                    asyncio.create_task, feishu_notifier.send_alert(escalation_msg))
+                            _extra_notifiers = getattr(app.state, "_extra_notifiers", [])
+                            for notifier in _extra_notifiers:
+                                _event_loop.call_soon_threadsafe(
+                                    asyncio.create_task, notifier.send_alert(escalation_msg))
+            except Exception as e:
+                structured_logger.log("error", "escalation.failed", f"告警升级调度失败: {e}")
+    return _run_escalation()
 
 
 # ------------------------------------------------------------------ #
@@ -193,8 +182,9 @@ async def lifespan(app: FastAPI):
     global feishu_notifier, _extra_notifiers
     _event_loop = asyncio.get_running_loop()
 
-    # config 已在模块级加载（见文件底部 _load_startup_config），此处直接使用
+    # config 已在模块级加载（见文件底部），此处直接使用
 
+    # ── 数据库 ──
     if config.get("database"):
         try:
             db_manager = DatabaseManager(config["database"])
@@ -205,6 +195,7 @@ async def lifespan(app: FastAPI):
             print(f"[WARN] 数据库连接失败: {e}")
             db_manager = None
 
+    # ── Redis ──
     if config.get("redis"):
         try:
             redis_stats = RedisStats(config["redis"])
@@ -214,6 +205,7 @@ async def lifespan(app: FastAPI):
             print(f"[WARN] Redis 连接失败: {e}")
             redis_stats = None
 
+    # ── 飞书通知 ──
     feishu_cfg = config.get("notifications", {}).get("feishu", {})
     if feishu_cfg.get("enabled"):
         try:
@@ -224,6 +216,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"[WARN] 飞书推送初始化失败: {e}")
 
+    # ── 其他通知通道 ──
     notifs_cfg = config.get("notifications", {})
     for name, cls in [("wechat_work", WeChatWorkNotifier), ("dingtalk", DingTalkNotifier),
                       ("email", EmailNotifier), ("webhook", WebhookNotifier)]:
@@ -235,24 +228,28 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 print(f"[WARN] {name} 通知初始化失败: {e}")
 
-    # 存入 app.state 供 routers 使用
+    # ── 存入 app.state（新代码优先从此读取；旧代码/测试继续用模块级全局） ──
     app.state.config = config
     app.state.config_file = _CONFIG_FILE_PATH
     app.state.db_manager = db_manager
     app.state.redis_stats = redis_stats
     app.state.cameras = cameras
+    app.state.feishu_notifier = feishu_notifier
+    app.state._extra_notifiers = _extra_notifiers
     app.state.structured_logger = structured_logger
     app.state.event_loop = _event_loop
 
-    _cleanup_task = asyncio.create_task(_run_cleanup())
-    _escalation_task = asyncio.create_task(_run_escalation())
+    # ── 启动后台任务（工厂函数闭包捕获 app） ──
+    _cleanup_task = asyncio.create_task(_make_cleanup_task(app))
+    _escalation_task = asyncio.create_task(_make_escalation_task(app))
 
+    # ── 初始化摄像头 ──
     cameras_cfg = config.get("cameras", [])
     if cameras_cfg:
         print(f"初始化 {len(cameras_cfg)} 个摄像头...")
         for cam_cfg in cameras_cfg:
             try:
-                get_camera(cam_cfg["id"], cam_cfg)
+                get_camera(app, cam_cfg["id"], cam_cfg)
                 print(f"  - 摄像头 {cam_cfg['id']} ({cam_cfg.get('name', 'N/A')}) 已启动")
             except Exception as e:
                 print(f"  - 摄像头 {cam_cfg['id']} 启动失败: {e}")
@@ -260,6 +257,7 @@ async def lifespan(app: FastAPI):
     structured_logger.log("info", "app.startup", "服务启动完成")
     yield
 
+    # ── 清理 ──
     for cam in cameras.values():
         try:
             cam.stop()
@@ -362,19 +360,24 @@ def _dispatch_signal(message: dict):
         _event_loop.call_soon_threadsafe(asyncio.create_task, _broadcast(message))
 
 
-def _camera_signal_callback(message: dict):
-    if message.get("type") == "log":
-        structured_logger._buffer.append(message)
-    if message.get("type") == "alert":
-        screenshot_path = message.get("data", {}).get("screenshot_path")
-        if _event_loop is not None and _event_loop.is_running():
-            if feishu_notifier:
-                _event_loop.call_soon_threadsafe(
-                    asyncio.create_task, feishu_notifier.send_alert(message, screenshot_path))
-            for notifier in _extra_notifiers:
-                _event_loop.call_soon_threadsafe(
-                    asyncio.create_task, notifier.send_alert(message, screenshot_path))
-    _dispatch_signal(message)
+def _make_camera_signal_callback(app):
+    """工厂：返回摄像头信号回调（闭包捕获 app.state）"""
+    def _camera_signal_callback(message: dict):
+        if message.get("type") == "log":
+            structured_logger._buffer.append(message)
+        if message.get("type") == "alert":
+            screenshot_path = message.get("data", {}).get("screenshot_path")
+            if _event_loop is not None and _event_loop.is_running():
+                feishu_notifier = getattr(app.state, "feishu_notifier", None)
+                if feishu_notifier:
+                    _event_loop.call_soon_threadsafe(
+                        asyncio.create_task, feishu_notifier.send_alert(message, screenshot_path))
+                _extra_notifiers = getattr(app.state, "_extra_notifiers", [])
+                for notifier in _extra_notifiers:
+                    _event_loop.call_soon_threadsafe(
+                        asyncio.create_task, notifier.send_alert(message, screenshot_path))
+        _dispatch_signal(message)
+    return _camera_signal_callback
 
 
 @app.websocket("/ws/alert")
@@ -412,7 +415,9 @@ async def websocket_alert(websocket: WebSocket):
 #  摄像头工厂
 # ------------------------------------------------------------------ #
 
-def get_camera(camera_id: int = 0, cam_cfg: Optional[dict] = None) -> CameraManager:
+def get_camera(app, camera_id: int = 0, cam_cfg: Optional[dict] = None) -> CameraManager:
+    """获取或创建摄像头实例（从 app.state.cameras 管理）"""
+    cameras = app.state.cameras
     if camera_id not in cameras:
         if cam_cfg is None:
             cameras_list = config.get("cameras", [])
@@ -433,8 +438,9 @@ def get_camera(camera_id: int = 0, cam_cfg: Optional[dict] = None) -> CameraMana
             camera_id=camera_id,
             source=cam_cfg.get("source", camera_id),
             width=width, height=height, device=device,
-            signal_callback=_camera_signal_callback,
-            db_manager=db_manager, redis_stats=redis_stats,
+            signal_callback=_make_camera_signal_callback(app),
+            db_manager=app.state.db_manager,
+            redis_stats=app.state.redis_stats,
             screenshot_config=screenshot_cfg,
         )
         if det_cfg.get("conf_threshold") is not None:
@@ -447,8 +453,8 @@ def get_camera(camera_id: int = 0, cam_cfg: Optional[dict] = None) -> CameraMana
             cameras[camera_id]._track_ttl_sec = float(alert_cfg["track_ttl_sec"])
 
         cameras[camera_id].start()
-        if redis_stats and redis_stats.is_enabled():
-            redis_stats.set_camera_online(camera_id)
+        if app.state.redis_stats and app.state.redis_stats.is_enabled():
+            app.state.redis_stats.set_camera_online(camera_id)
         structured_logger.log("info", "camera.created", "摄像头实例已创建",
                               camera_id=camera_id,
                               data={"name": cam_cfg.get("name", ""), "source": str(cam_cfg.get("source", camera_id))})
@@ -460,15 +466,15 @@ def get_camera(camera_id: int = 0, cam_cfg: Optional[dict] = None) -> CameraMana
 # ------------------------------------------------------------------ #
 
 @app.get("/video_feed")
-async def video_feed(camera_id: int = 0, _user: dict = Depends(get_current_user)):
-    camera = get_camera(camera_id)
+async def video_feed(request: Request, camera_id: int = 0, _user: dict = Depends(get_current_user)):
+    camera = get_camera(request.app, camera_id)
     return StreamingResponse(camera.get_frame_generator(),
                              media_type="multipart/x-mixed-replace; boundary=frame")
 
 
 @app.get("/playback")
-async def playback(camera_id: int = 0, seconds: float = 10.0, _user: dict = Depends(get_current_user)):
-    camera = get_camera(camera_id)
+async def playback(request: Request, camera_id: int = 0, seconds: float = 10.0, _user: dict = Depends(get_current_user)):
+    camera = get_camera(request.app, camera_id)
     frames = camera.get_frame_buffer(seconds)
 
     async def generate():
@@ -483,7 +489,10 @@ async def playback(camera_id: int = 0, seconds: float = 10.0, _user: dict = Depe
 
 
 @app.get("/health")
-async def health():
+async def health(request: Request):
+    cameras = request.app.state.cameras
+    db_manager = request.app.state.db_manager
+    redis_stats = request.app.state.redis_stats
     camera_stats = [cam.get_status() for cam in cameras.values()]
     db_ok = False
     if db_manager:
@@ -526,9 +535,11 @@ async def health():
 
 
 @app.get("/metrics")
-async def prometheus_metrics():
+async def prometheus_metrics(request: Request):
     from backend.metrics import collect_metrics
-    return HTMLResponse(content=collect_metrics(cameras, db_manager, redis_stats, START_TS, ws_clients=len(_ws_clients)),
+    st = request.app.state
+    return HTMLResponse(content=collect_metrics(st.cameras, st.db_manager, st.redis_stats,
+                                                START_TS, ws_clients=len(_ws_clients)),
                         media_type="text/plain; charset=utf-8")
 
 

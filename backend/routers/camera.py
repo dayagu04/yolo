@@ -9,10 +9,10 @@ from backend.routers.deps import get_db, get_config, get_cameras, get_redis, get
 camera_router = APIRouter(prefix="/api/v1", tags=["摄像头"])
 
 
-def _get_or_create_camera(camera_id: int, cam_cfg: dict = None):
+def _get_or_create_camera(request: Request, camera_id: int, cam_cfg: dict = None):
     """获取或创建摄像头实例（延迟导入避免循环）"""
     from backend.main import get_camera
-    return get_camera(camera_id, cam_cfg)
+    return get_camera(request.app, camera_id, cam_cfg)
 
 
 @camera_router.get("/cameras")
@@ -44,7 +44,7 @@ async def update_config(
     camera_id: int, cfg: DetectionConfig, request: Request,
     _user: dict = Depends(require_operator),
 ):
-    camera = _get_or_create_camera(camera_id)
+    camera = _get_or_create_camera(request, camera_id)
     if cfg.enabled is not None:
         camera.toggle_detection(cfg.enabled)
     if cfg.conf is not None:
@@ -57,8 +57,8 @@ async def update_config(
 
 
 @camera_router.get("/camera/{camera_id}/status")
-async def camera_status(camera_id: int, _user: dict = Depends(get_current_user)):
-    return _get_or_create_camera(camera_id).get_status()
+async def camera_status(camera_id: int, request: Request, _user: dict = Depends(get_current_user)):
+    return _get_or_create_camera(request, camera_id).get_status()
 
 
 @camera_router.post("/cameras/{camera_id}/add")
@@ -87,7 +87,7 @@ async def add_camera(camera_id: int, request: Request, _user: dict = Depends(req
     }
 
     try:
-        cam = _get_or_create_camera(camera_id, cam_cfg)
+        cam = _get_or_create_camera(request, camera_id, cam_cfg)
         audit(request, _user["sub"], "camera_add", resource=f"camera:{camera_id}",
               detail=f"name={cam_cfg['name']}, source={source}")
         logger = get_logger(request)
